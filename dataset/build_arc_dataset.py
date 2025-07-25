@@ -13,7 +13,7 @@ from numpy.typing import NDArray
 
 import tqdm
 
-from pydantic import BaseModel, BeforeValidator, Field, ConfigDict, TypeAdapter, ValidationError
+from pydantic import BaseModel, BeforeValidator, Field, ConfigDict, TypeAdapter
 
 from common import PuzzleDatasetMetadata, dihedral_transform
 
