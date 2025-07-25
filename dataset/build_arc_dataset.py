@@ -137,29 +137,6 @@ class ARCPuzzle(BaseModel):
         )
 
 
-class DatasetSplit(BaseModel):
-    flattened_inputs: list[FlatArray] = Field(default_factory=list)
-    flattened_labels: list[FlatArray] = Field(default_factory=list)
-    puzzle_identifiers: list[int] = Field(default_factory=list)
-    puzzle_indices: list[int] = Field(default_factory=lambda: [0])
-    group_indices: list[int] = Field(default_factory=lambda: [0])
-
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-
-
-def _save_dataset_split(dataset_split: DatasetSplit, split_dir: Path) -> None:
-    data = {
-        "inputs": np.stack(dataset_split.flattened_inputs, 0),
-        "labels": np.stack(dataset_split.flattened_labels, 0),
-        "puzzle_identifiers": np.array(dataset_split.puzzle_identifiers, dtype=np.int32),
-        "puzzle_indices": np.array(dataset_split.puzzle_indices, dtype=np.int32),
-        "group_indices": np.array(dataset_split.group_indices, dtype=np.int32),
-    }
-
-    for name, array in data.items():
-        np.save(split_dir / f"{SET_NAME}__{name}.npy", array)
-
-
 def _parse_raw_grid(raw_grid: list[list[int]]) -> GridArray:
     arr = np.array(raw_grid, dtype=np.uint8)
 
@@ -201,11 +178,6 @@ def _apply_translational_augment(example: PuzzleExample) -> PuzzleExample:
     )
 
 
-def _apply_grid_transform(grid: GridArray, trans_id: int, color_map: np.ndarray) -> GridArray:
-    transformed_grid = dihedral_transform(grid, trans_id)
-    return np.take(color_map, transformed_grid)
-
-
 def _apply_dihedral_transform_augment(puzzle: ARCPuzzle) -> ARCPuzzle:
     trans_id = np.random.randint(0, DIHEDRAL_SYMMETRIES)
     color_map = np.concatenate(
@@ -219,8 +191,8 @@ def _apply_dihedral_transform_augment(puzzle: ARCPuzzle) -> ARCPuzzle:
     augmented_examples = [
         PuzzleExample(
             example_type=example.example_type,
-            input_grid=_apply_grid_transform(example.input_grid, trans_id, color_map),
-            output_grid=_apply_grid_transform(example.output_grid, trans_id, color_map),
+            input_grid=color_map[dihedral_transform(example.input_grid, trans_id)],
+            output_grid=color_map[dihedral_transform(example.output_grid, trans_id)],
         )
         for example in puzzle.examples
     ]
@@ -338,51 +310,43 @@ def _build_identifier_map(data: dict[ProcessedArcSplit, list[list[ARCPuzzle]]]) 
 
 
 def _save_split_data(split: ProcessedArcSplit, puzzles: list[list[ARCPuzzle]], identifier_map: dict[str, int], output_dir: Path, metadata_filename: str) -> None:
-    split_data = DatasetSplit()
-
-    total_examples = 0
-    total_puzzles = 0
-
-    for augmented_puzzles in tqdm.tqdm(puzzles, desc=f"Preparing {split} data for saving"):
-        for puzzle in augmented_puzzles:
-            total_examples += len(puzzle.examples)
-            split_data.flattened_inputs.extend(example.input_grid.flatten() for example in puzzle.examples)
-            split_data.flattened_labels.extend(example.output_grid.flatten() for example in puzzle.examples)
-            split_data.puzzle_indices.append(total_examples)
-            split_data.puzzle_identifiers.append(identifier_map[puzzle.id])
-
-        total_puzzles += len(augmented_puzzles)
-        split_data.group_indices.append(total_puzzles)
+    all_puzzles = list(itertools.chain.from_iterable(puzzles))
+    all_examples = list(itertools.chain.from_iterable(p.examples for p in all_puzzles))
+    
+    flattened_inputs = np.stack([ex.input_grid.flatten() for ex in all_examples], 0)
+    flattened_labels = np.stack([ex.output_grid.flatten() for ex in all_examples], 0)
+    puzzle_identifiers = np.array([identifier_map[p.id] for p in all_puzzles], dtype=np.uint32)
+    puzzle_indices = np.cumsum([len(p.examples) for p in all_puzzles], dtype=np.uint32)
+    group_indices = np.cumsum([len(aug_puzzles) for aug_puzzles in puzzles], dtype=np.uint32)
 
     split_output_dir = output_dir / split
     split_output_dir.mkdir(parents=True, exist_ok=True)
-    _save_dataset_split(split_data, split_output_dir)
-    print(f"Saved {split} data to {split_output_dir}!")
+    for name, array in (
+        ("inputs", flattened_inputs),
+        ("labels", flattened_labels),
+        ("puzzle_identifiers", puzzle_identifiers),
+        ("puzzle_indices", puzzle_indices),
+        ("group_indices", group_indices),
+    ):
+        np.save(split_output_dir / f"{SET_NAME}__{name}.npy", array)
 
-    _save_dataset_metadata(
-        output_dir=split_output_dir,
-        identifier_count=len(identifier_map) + 1,  # +1 for blank puzzle
-        n_arc_puzzles=len(puzzles),
-        n_aug_puzzles=total_puzzles,
-        n_aug_examples=total_examples,
-        metadata_filename=metadata_filename,
-    )
-
-
-def _save_dataset_metadata(output_dir: Path, identifier_count: int, n_arc_puzzles: int, n_aug_puzzles: int, n_aug_examples: int, metadata_filename: str) -> None:
+    total_puzzles = len(all_puzzles)
+    total_examples = puzzle_indices[-1] if total_puzzles > 0 else 0
     metadata = PuzzleDatasetMetadata(
         seq_len=ARC_MAX_GRID_SIZE * ARC_MAX_GRID_SIZE,
         vocab_size=(ARC_MAX_COLOR_VALUE + 1) + N_PADDING_TOKENS + N_EOS_TOKENS,
         pad_id=PAD_TOKEN,
         ignore_label_id=PAD_TOKEN,
         blank_identifier_id=PAD_TOKEN,
-        num_puzzle_identifiers=identifier_count,
-        total_groups=n_arc_puzzles,
-        mean_puzzle_examples=(n_aug_examples / n_aug_puzzles if n_aug_puzzles > 0 else 0),
+        num_puzzle_identifiers=len(identifier_map) + 1,  # +1 for blank puzzle
+        total_groups=total_puzzles,
+        mean_puzzle_examples=(total_examples / total_puzzles if total_puzzles > 0 else 0),
         sets=[SET_NAME],
     )
     with open(output_dir / f"{metadata_filename}.json", "w") as f:
         json.dump(metadata.model_dump(), f)
+
+    print(f"Saved {split} data to {split_output_dir}")
 
 
 def _save_identifier_list(identifier_map: dict[str, int], output_path: Path) -> None:
