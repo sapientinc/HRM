@@ -56,15 +56,15 @@ FlatArray = NDArray[np.uint8]
 
 
 class ARCDatasetBuildConfig(BaseModel):
-    seed: int = Field(default=42)
+    seed: int = 42
     num_aug: int = Field(default=1000, ge=0)
-    augment_retries_factor: int = Field(default=5)
+    augment_retries_factor: int = Field(default=5, ge=1)
 
-    raw_dataset_dirs: list[str | Path] = Field(default=["dataset/raw-data/ARC-AGI/data", "dataset/raw-data/ConceptARC/corpus"])
+    raw_dataset_dirs: list[str | Path] = ["dataset/raw-data/ARC-AGI/data", "dataset/raw-data/ConceptARC/corpus"]
 
-    processed_dataset_dir: str = Field(default="data/arc-aug-1000")
-    identifiers_filename: str = Field(default="identifiers")
-    metadata_filename: str = Field(default="dataset")
+    processed_dataset_dir: str = "data/arc-aug-1000"
+    identifiers_filename: str = "identifiers"
+    metadata_filename: str = "dataset"
 
 
 class PuzzleExample(BaseModel):
