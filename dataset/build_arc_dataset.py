@@ -5,7 +5,7 @@ import itertools
 import os
 from pathlib import Path
 import random
-from typing import Final, Literal , get_args
+from typing import Annotated, Final, Literal , get_args
 
 import hashlib
 import json
@@ -14,7 +14,7 @@ from numpy.typing import NDArray
 
 import tqdm
 
-from pydantic import BaseModel, Field, ConfigDict, TypeAdapter, ValidationError
+from pydantic import BaseModel, BeforeValidator, Field, ConfigDict, TypeAdapter, ValidationError
 
 from common import PuzzleDatasetMetadata, dihedral_transform
 
@@ -39,10 +39,14 @@ class ArcIOKey(str, Enum):
     OUTPUT = "output"
 
 
-RawArcSplit = Literal["training", "evaluation"]
+RawArcSplit = Annotated[
+    Literal["training", "evaluation"],
+    BeforeValidator(lambda x: "evaluation" if x == "evaluation" else "training"), # ConceptARC data assumed to be training
+]
 ProcessedArcSplit = Literal["train", "test"]
 ARCExampleType = Literal["train", "test"]
 RawPuzzle = dict[ARCExampleType, list[dict[ArcIOKey, list[list[int]]]]]
+
 # For clarity
 GridArray = NDArray[np.uint8]
 FlatArray = NDArray[np.uint8]
@@ -55,7 +59,7 @@ class ARCDatasetBuildConfig(BaseModel):
     num_aug: int = Field(default=1000, ge=0)
     augment_retries_factor: int = Field(default=5)
 
-    raw_dataset_dir: str = Field(default="dataset/raw-data/ARC-AGI/data")
+    raw_dataset_dirs: list[str] = Field(default=["dataset/raw-data/ARC-AGI/data", "dataset/raw-data/ConceptARC/corpus"])
 
     processed_dataset_dir: str = Field(default="data/arc-aug-1000")
     identifiers_filename: str = Field(default="identifiers")
@@ -307,9 +311,15 @@ def _categorize_puzzles(
 
 
 def _process_arcagi_dataset(
-    dataset_path: str | Path, config: ARCDatasetBuildConfig
+    dataset_paths: list[str | Path], config: ARCDatasetBuildConfig
 ) -> dict[ProcessedArcSplit, list[list[ARCPuzzle]]]:
-    puzzles = _load_all_raw_puzzles(dataset_path)
+    puzzles = []
+    for dataset_path in dataset_paths:
+        if Path(dataset_path).exists():
+            dataset_puzzles = _load_all_raw_puzzles(dataset_path)
+            puzzles.extend(dataset_puzzles)
+            print(f"[{dataset_path}] loaded {len(dataset_puzzles)} puzzles")
+    
     train_groups: list[list[ARCPuzzle]] = []
     test_groups: list[list[ARCPuzzle]] = []
     process_puzzle = partial(_process_single_puzzle, config=config)
@@ -400,7 +410,7 @@ def convert_dataset(config: ARCDatasetBuildConfig) -> None:
     random.seed(config.seed)
     output_dir = Path(config.processed_dataset_dir)
 
-    per_split_puzzle_groups = _process_arcagi_dataset(config.raw_dataset_dir, config)
+    per_split_puzzle_groups = _process_arcagi_dataset(config.raw_dataset_dirs, config)
     print("Building identifier map")
     identifier_map = _build_identifier_map(per_split_puzzle_groups)
     print("Saving identifier list")
