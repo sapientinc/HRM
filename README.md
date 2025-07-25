@@ -94,11 +94,8 @@ Experiments below assume an 8-GPU setup.
 # Initialize submodules
 git submodule update --init --recursive
 
-# Concept ARC
-python dataset/build_arc_dataset.py --raw-dataset-dir dataset/raw-data/ConceptARC/corpus --processed-dataset-dir data/concept-arc-aug-1000 
-
-# ARC-1
-python dataset/build_arc_dataset.py --raw-dataset-dir dataset/raw-data/ARC-AGI/data --processed-dataset-dir data/arc-aug-1000 
+# ConceptARC (train only) + ARC-1
+python dataset/build_arc_dataset.py
 
 # ARC-2
 python dataset/build_arc_dataset.py --raw-dataset-dir dataset/raw-data/ARC-AGI-2/data --processed-dataset-dir data/arc-2-aug-1000  # ARC-2 official, 1120 examples
