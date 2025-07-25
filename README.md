@@ -98,7 +98,7 @@ git submodule update --init --recursive
 python dataset/build_arc_dataset.py
 
 # ARC-2
-python dataset/build_arc_dataset.py --raw-dataset-dir dataset/raw-data/ARC-AGI-2/data --processed-dataset-dir data/arc-2-aug-1000  # ARC-2 official, 1120 examples
+python dataset/build_arc_dataset.py --raw-dataset-dirs dataset/raw-data/ARC-AGI-2/data --processed-dataset-dir data/arc-2-aug-1000  # ARC-2 official, 1120 examples
 
 # Sudoku-Extreme
 python dataset/build_sudoku_dataset.py  # Full version
