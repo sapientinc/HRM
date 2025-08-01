@@ -135,6 +135,11 @@ def find_instance(api: VastAI, instance_kind: InstanceKind) -> Optional[Instance
     return chosen_instance
 
 
+def create_instance(api: VastAI, template_id: int, instance_id: int):
+    pass
+
+
+
 if __name__ == "__main__":
     api = VastAI()
     instance_option = find_instance(api=api, instance_kind=InstanceKind.Dev)
@@ -142,5 +147,7 @@ if __name__ == "__main__":
     if instance_option is None:
         raise RuntimeError("Could not find an instance for the desired spec")
 
+    template_id = 263774 # my template ...
+    
     # TODO: create the instance
     # TODO: automatically run all setup scripts on the instance
