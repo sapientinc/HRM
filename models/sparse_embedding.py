@@ -14,16 +14,15 @@ class CastedSparseEmbedding(nn.Module):
         self.cast_to = cast_to
 
         # Real Weights
-        # Truncated LeCun normal init
-        self.weights = nn.Buffer(
-            trunc_normal_init_(torch.empty((num_embeddings, embedding_dim)), std=init_std), persistent=True
-        )
+        weights_tensor = trunc_normal_init_(torch.empty((num_embeddings, embedding_dim)), std=init_std)
+        self.register_buffer('weights', weights_tensor)
 
-        # Local weights and IDs
-        # Local embeddings, with gradient, not persistent
-        self.local_weights = nn.Buffer(torch.zeros(batch_size, embedding_dim, requires_grad=True), persistent=False)
-        # Local embedding IDs, not persistent
-        self.local_ids = nn.Buffer(torch.zeros(batch_size, dtype=torch.int32), persistent=False)
+        # Local weights and IDs - for inference, gradients are not needed.
+        local_weights_tensor = torch.zeros(batch_size, embedding_dim)
+        self.register_buffer('local_weights', local_weights_tensor, persistent=False)
+
+        local_ids_tensor = torch.zeros(batch_size, dtype=torch.int32)
+        self.register_buffer('local_ids', local_ids_tensor, persistent=False)
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         if not self.training:
