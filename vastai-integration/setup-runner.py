@@ -4,6 +4,9 @@ from typing import List, Dict, Any, Optional
 from vastai_sdk import VastAI
 from pprint import pprint
 from pint import UnitRegistry, Quantity
+from pathlib import Path, PurePath
+from plumbum import SshMachine
+
 
 ureg = UnitRegistry()
 # declare a new “currency” dimension:
@@ -56,7 +59,7 @@ class InstanceOption:
     def from_dict(dict: Dict[str, Any]) -> 'InstanceOption':
         return InstanceOption(
             instance_id=dict["id"],
-            cost_per_hour=dict["dph_total_adj"] * ureg.USD,
+            cost_per_hour=dict.get("dph_total_adj", dict.get("dph_total")) * ureg.USD,
             num_gpus=dict["num_gpus"],
             gpu_name=dict["gpu_name"],
             gpu_ram_size=dict["gpu_ram"] * ureg.MB,
@@ -64,7 +67,7 @@ class InstanceOption:
             total_tflops=dict["total_flops"] * ureg.teraFLOP / ureg.second,
             downstream=dict["inet_down"] * ureg.MB / ureg.second,
             upstream=dict["inet_up"] * ureg.MB / ureg.second,
-            reliability=dict["reliability"],
+            reliability=dict.get("reliability", dict.get("reliability2", 0.0)),
             cuda_version=dict["cuda_max_good"]
         )
     
@@ -83,6 +86,42 @@ class InstanceOption:
             f"{indent_str}Upstream: {self.upstream.to('MB/s').magnitude:.2f} MB/s\n"
             f"{indent_str}Reliability: {self.reliability:.2f}\n"
             f"{indent_str}CUDA Version: {self.cuda_version}\n"
+        )
+    
+    def fulfills(self, instance_spec: InstanceSpec) -> bool:
+        """
+        Check if an instance option is within spec
+        """
+        return (
+            self.num_gpus==instance_spec.num_gpus and
+            self.cost_per_hour<=instance_spec.max_cost_per_hour and
+            self.gpu_ram_size>=instance_spec.min_gpu_ram_size and
+            self.gpu_ram_bw>=instance_spec.min_gpu_ram_bw and
+            self.total_tflops>=instance_spec.min_total_tflops and
+            self.upstream>=instance_spec.min_upstream and
+            self.downstream>=instance_spec.min_downstream and
+            self.cuda_version>=instance_spec.min_cuda_version and
+            self.reliability>=instance_spec.min_reliability
+        )
+
+
+@dataclass
+class RunningInstanceOption(InstanceOption):
+    ip_addr: str
+    ssh_host: str
+    ssh_port: int
+    static_ip: bool
+    
+    @staticmethod
+    def from_dict(dict: Dict[str, Any]) -> 'RunningInstanceOption':
+        instance_opt = InstanceOption.from_dict(dict)
+        
+        return RunningInstanceOption(
+            **instance_opt.__dict__,
+            ip_addr=dict["public_ipaddr"],
+            ssh_host=dict["ssh_host"],
+            ssh_port=dict["ssh_port"]+1,
+            static_ip=dict["static_ip"]
         )
 
 
@@ -139,15 +178,63 @@ def create_instance(api: VastAI, template_id: int, instance_id: int):
     pass
 
 
-
-if __name__ == "__main__":
-    api = VastAI()
-    instance_option = find_instance(api=api, instance_kind=InstanceKind.Dev)
+def create_new_instance_from_spec(api: VastAI, instance_kind: InstanceKind):
+    instance_option = find_instance(api=api, instance_kind=instance_kind)
     
     if instance_option is None:
         raise RuntimeError("Could not find an instance for the desired spec")
 
-    template_id = 263774 # my template ...
+    template_hash = "aca0a2979e975f993dae3e127d083913" # my template ...
+
+    return api.create_instance(
+        id=instance_option.instance_id,
+        template_hash=template_hash,
+        ssh=True
+    )
+
+
+def show_existing_instances_for_user(api: VastAI) -> List[RunningInstanceOption]:
+    results: List[Dict[str, Any]] = api.show_instances() # type: ignore
     
+    parsed_results = []
+    
+    for instance in results:
+        if instance["actual_status"] not in ["running"]:
+            continue
+        parsed_results.append(RunningInstanceOption.from_dict(instance))
+    
+    return parsed_results
+
+def check_existing_instances(api: VastAI, instance_spec: InstanceSpec) -> Optional[RunningInstanceOption]:
+    """
+    Checks if a currently running instance fulfills the spec
+    """
+    running_instances = show_existing_instances_for_user(api=api)
+    
+    for running_instance in running_instances:
+        if running_instance.fulfills(instance_spec):
+            return running_instance
+    return None
+
+def fetch_ssh_key(path: Path) -> str:
+    return path.read_text(encoding='utf-8')
+
+
+if __name__ == "__main__":
+    api = VastAI()
+    
+    local_ssh_key = fetch_ssh_key(Path("/Users/hendrikleier/.ssh/id_rsa.pub"))
+    
+    running_instance = check_existing_instances(api=api, instance_spec=InstanceKind.Dev.value)
+    
+    if running_instance is not None:
+        print("There is a currently running instance which fulfills the requirements:")
+        print(running_instance.pretty_str())
+            
+        result = api.attach_ssh(instance_id=running_instance.instance_id, ssh_key=local_ssh_key)
+        
+        print()
+    
+    print()
     # TODO: create the instance
     # TODO: automatically run all setup scripts on the instance

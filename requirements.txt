@@ -11,3 +11,4 @@ hydra-core
 huggingface_hub
 vastai-sdk
 pint
+plumbum
