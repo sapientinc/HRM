@@ -88,8 +88,11 @@ class RotaryEmbedding(nn.Module):
 
         # Different from paper, but it uses a different permutation in order to obtain the same calculation
         emb = torch.cat((freqs, freqs), dim=-1)
-        self.cos_cached = nn.Buffer(emb.cos(), persistent=False)
-        self.sin_cached = nn.Buffer(emb.sin(), persistent=False)
+        
+        # --- CORRECTED CODE BLOCK ---
+        self.register_buffer('cos_cached', emb.cos(), persistent=False)
+        self.register_buffer('sin_cached', emb.sin(), persistent=False)
+        # --- END OF CORRECTION ---
 
     def forward(self):
         return self.cos_cached, self.sin_cached
@@ -142,7 +145,7 @@ class SwiGLU(nn.Module):
         inter = _find_multiple(round(expansion * hidden_size * 2 / 3), 256)
 
         self.gate_up_proj = CastedLinear(hidden_size, inter * 2, bias=False)
-        self.down_proj    = CastedLinear(inter, hidden_size, bias=False)
+        self.down_proj     = CastedLinear(inter, hidden_size, bias=False)
 
     def forward(self, x):
         gate, up = self.gate_up_proj(x).chunk(2, dim=-1)
