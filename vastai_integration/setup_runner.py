@@ -5,8 +5,9 @@ from vastai_sdk import VastAI
 from pprint import pprint
 from pint import UnitRegistry, Quantity
 from pathlib import Path, PurePath
-from plumbum import SshMachine
-
+import asyncio
+from time import sleep
+from ssh_setup import SSHSession
 
 ureg = UnitRegistry()
 # declare a new “currency” dimension:
@@ -178,7 +179,7 @@ def create_instance(api: VastAI, template_id: int, instance_id: int):
     pass
 
 
-def create_new_instance_from_spec(api: VastAI, instance_kind: InstanceKind):
+def create_new_instance_from_spec(api: VastAI, instance_kind: InstanceKind) -> int:
     instance_option = find_instance(api=api, instance_kind=instance_kind)
     
     if instance_option is None:
@@ -186,11 +187,13 @@ def create_new_instance_from_spec(api: VastAI, instance_kind: InstanceKind):
 
     template_hash = "aca0a2979e975f993dae3e127d083913" # my template ...
 
-    return api.create_instance(
+    create_result = api.create_instance(
         id=instance_option.instance_id,
         template_hash=template_hash,
         ssh=True
     )
+    
+    return instance_option.instance_id
 
 
 def show_existing_instances_for_user(api: VastAI) -> List[RunningInstanceOption]:
@@ -220,21 +223,50 @@ def fetch_ssh_key(path: Path) -> str:
     return path.read_text(encoding='utf-8')
 
 
+def wait_for_instance(api: VastAI, instance_spec: InstanceSpec) -> RunningInstanceOption:
+    """
+    Wait until the instance is ready
+    """
+    instance_with_spec = check_existing_instances(api=api, instance_spec=instance_spec)
+    
+    while instance_with_spec is None:
+        print("Instance is not yet ready, waiting 10 seconds")
+        sleep(10)
+        instance_with_spec = check_existing_instances(api=api, instance_spec=instance_spec) # type: ignore
+    print("Instance is ready")
+    
+    return instance_with_spec
+
+def handle_setup(api: VastAI, instance_kind: InstanceKind) -> RunningInstanceOption:
+    running_instance = check_existing_instances(api=api, instance_spec=instance_kind.value)
+    
+    if running_instance is None:
+        new_instance_id = create_new_instance_from_spec(api=api, instance_kind=instance_kind)
+        
+        running_instance = wait_for_instance(api=api, instance_spec=instance_kind.value)
+    
+    return running_instance
+
+
+async def setup_machine(api: VastAI, instance_info: RunningInstanceOption):
+    async with SSHSession(instance_info.ssh_host, port=instance_info.ssh_port,
+                          username='root', client_keys=['~/.ssh/id_rsa']) as sess:
+        await sess.run('export FOO=bar')
+        out = await sess.run('echo $FOO')
+        print(out)  # prints “bar”
+
+
 if __name__ == "__main__":
     api = VastAI()
     
+    running_instance = handle_setup(api=api, instance_kind=InstanceKind.Dev)
+    
     local_ssh_key = fetch_ssh_key(Path("/Users/hendrikleier/.ssh/id_rsa.pub"))
-    
-    running_instance = check_existing_instances(api=api, instance_spec=InstanceKind.Dev.value)
-    
-    if running_instance is not None:
-        print("There is a currently running instance which fulfills the requirements:")
-        print(running_instance.pretty_str())
-            
-        result = api.attach_ssh(instance_id=running_instance.instance_id, ssh_key=local_ssh_key)
         
-        print()
-    
+    result = api.attach_ssh(instance_id=running_instance.instance_id, ssh_key=local_ssh_key)
+
+    asyncio.run(setup_machine(api=api, instance_info=running_instance))
+
     print()
     # TODO: create the instance
     # TODO: automatically run all setup scripts on the instance
