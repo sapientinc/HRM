@@ -35,7 +35,7 @@ pip3 install packaging ninja wheel setuptools setuptools-scm
 Then install FlashAttention. For Hopper GPUs, install FlashAttention 3
 
 ```bash
-git clone git@github.com:Dao-AILab/flash-attention.git
+git clone https://github.com/Dao-AILab/flash-attention
 cd flash-attention/hopper
 python setup.py install
 ```
