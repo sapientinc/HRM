@@ -8,6 +8,8 @@ from pathlib import Path, PurePath
 import asyncio
 from time import sleep
 from ssh_setup import SSHSession
+from github_config import get_github_api
+from github import Github, AuthenticatedUser
 
 ureg = UnitRegistry()
 # declare a new “currency” dimension:
@@ -248,16 +250,52 @@ def handle_setup(api: VastAI, instance_kind: InstanceKind) -> RunningInstanceOpt
     return running_instance
 
 
-async def setup_machine(api: VastAI, instance_info: RunningInstanceOption):
+async def setup_machine(api: VastAI, github: Github, instance_info: RunningInstanceOption):
     async with SSHSession(instance_info.ssh_host, port=instance_info.ssh_port,
                           username='root', client_keys=['~/.ssh/id_rsa']) as sess:
-        await sess.run('export FOO=bar')
-        out = await sess.run('echo $FOO')
-        print(out)  # prints “bar”
-
+        # Nvim
+        print("Installing nvim")
+        result = await sess.run('sudo apt install neovim python3-neovim -y')
+        print(f"result: {result}")
+        
+        #PyTorch
+        print("Installing PyTorch")
+        await sess.run('PYTORCH_INDEX_URL=https://download.pytorch.org/whl/cu126')
+        result = await sess.run("pip3 install torch torchvision torchaudio --index-url $PYTORCH_INDEX_URL")
+        print(f"result: {result}")
+        
+        # PyTorch helpers
+        print("Installing additional stuff")
+        result = await sess.run("pip3 install packaging ninja wheel setuptools setuptools-scm flash-attn")
+        print(f"result: {result}")
+        
+        # ECDSA keys
+        print("Generating ECDSA keys")
+        result = await sess.run("ssh-keygen -t ecdsa -b 521 -C \"hendrik.leier75@gmail.com\" -f ~/.ssh/id_rsa -N \"\" -q </dev/null")
+        print(f"result: {result}")
+        key = await sess.run("cat ~/.ssh/id_rsa.pub")
+        
+        print(f"key for git: {key}")
+        
+        # Add key to github
+        print("adding key to github")
+        github_user = github.get_user()
+        github_user.create_key(title=f"VastAI box {instance_info.instance_id}", key=key) # type: ignore
+        print("Key added")
+        
+        # Clone repo
+        print("Cloning repo")
+        result = await sess.run("git clone git@github.com:HendrikLeier/HRM.git")
+        print(f"result: {result}")
+        
+        print("Install requirements")
+        await sess.run("cd HRM")
+        result = await sess.run("pip3 install -r requirements.txt")
+        print(f"Result: {result}")
 
 if __name__ == "__main__":
     api = VastAI()
+    github = get_github_api()
     
     running_instance = handle_setup(api=api, instance_kind=InstanceKind.Dev)
     
@@ -265,7 +303,7 @@ if __name__ == "__main__":
         
     result = api.attach_ssh(instance_id=running_instance.instance_id, ssh_key=local_ssh_key)
 
-    asyncio.run(setup_machine(api=api, instance_info=running_instance))
+    asyncio.run(setup_machine(api=api, github=github, instance_info=running_instance))
 
     print()
     # TODO: create the instance

@@ -12,3 +12,5 @@ huggingface_hub
 vastai-sdk
 pint
 asyncssh
+xdg
+PyGithub

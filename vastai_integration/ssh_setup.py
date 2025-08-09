@@ -42,7 +42,7 @@ class SSHSession:
         """Run one command, return its output (sans trailing prompt)."""
         self._proc: asyncssh.process.SSHClientProcess
         # write the command, then echo a unique marker
-        self._proc.stdin.write(f"{cmd}\necho {self.marker}\n")
+        self._proc.stdin.write(f"{cmd} && echo {self.marker}\n")
         # send
         await self._proc.stdin.drain()
 
