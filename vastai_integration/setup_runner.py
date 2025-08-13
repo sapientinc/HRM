@@ -280,7 +280,7 @@ async def setup_machine(api: VastAI, github: Github, instance_info: RunningInsta
         #PyTorch
         print("Installing PyTorch")
         await sess.run('PYTORCH_INDEX_URL=https://download.pytorch.org/whl/cu126')
-        result = await sess.run("/venv/main/bin/python -m pip install torch torchvision torchaudio --index-url $PYTORCH_INDEX_URL")
+        result = await sess.run("/venv/main/bin/python -m pip install torch==2.7.1 torchvision torchaudio --index-url $PYTORCH_INDEX_URL")
         print(f"result: {result}")
         
         # PyTorch helpers
@@ -290,7 +290,7 @@ async def setup_machine(api: VastAI, github: Github, instance_info: RunningInsta
         
         # Flash Attn
         print("Installing Flash attention")
-        result = await sess.run("MAX_JOBS=8 /venv/main/bin/python -m pip install flash-attn==2.7.3 --no-build-isolation")
+        result = await sess.run("MAX_JOBS=8 /venv/main/bin/python -m pip install flash-attn==2.8.2 --no-build-isolation")
         print(f"result: {result}")
         
         # ECDSA keys
@@ -307,6 +307,7 @@ async def setup_machine(api: VastAI, github: Github, instance_info: RunningInsta
         github_user.create_key(title=f"VastAI box {instance_info.instance_id}", key=key) # type: ignore
         print("Key added")
         
+        # TODO: Need to add github key to known hosts manually
         # Clone repo
         print("Cloning repo")
         result = await sess.run("git clone git@github.com:HendrikLeier/HRM.git")
