@@ -22,18 +22,21 @@ ureg.define('teraFLOP = [teraFLOP]')
 @dataclass
 class InstanceSpec:
     max_cost_per_hour: Quantity # The maximum rate per hour in USD
+    min_cpu_ram_size: Quantity # The minimum CPU ram
     num_gpus: int # The number of GPUs
     min_gpu_ram_size: Quantity # The minimum size per GPU RAM in GB
     min_gpu_ram_bw: Quantity # The minimum bandwidth of the GPU ram in GB/s
     min_total_tflops: Quantity # The minimum total TFLOP/s of the system
     min_downstream: Quantity # minimum download rate in MB/s
     min_upstream: Quantity # minimum upload rate in MB/s
+    min_disk_space: Quantity # minimum disk spaces
     min_reliability: float # minimum reliability
     min_cuda_version: float = 12.6 # Minimum cuda version
 
     def to_query(self) -> str:
         return (
             f"num_gpus = {self.num_gpus} "
+            f"cpu_ram >= {self.min_cpu_ram_size.to('GB').magnitude} "
             f"gpu_ram >= {self.min_gpu_ram_size.to('GB').magnitude} "
             f"gpu_mem_bw >= {self.min_gpu_ram_bw.to('GB/s').magnitude} "
             f"total_flops >= {self.min_total_tflops.to('teraFLOP/s').magnitude} "
@@ -41,13 +44,15 @@ class InstanceSpec:
             f"inet_up >= {self.min_upstream.to('MB/s').magnitude} "
             f"cuda_vers >= {self.min_cuda_version} "
             f"reliability >= {self.min_reliability} "
-            f"dph <= {self.max_cost_per_hour.to('USD').magnitude}"
+            f"dph <= {self.max_cost_per_hour.to('USD').magnitude} "
+            f"disk_space >= {self.min_disk_space.to('GB').magnitude}"
         )
 
 @dataclass
 class InstanceOption:
     instance_id: int
     cost_per_hour: Quantity
+    cpu_ram: Quantity
     num_gpus: int
     gpu_name: str
     gpu_ram_size: Quantity
@@ -57,12 +62,14 @@ class InstanceOption:
     upstream: Quantity
     reliability: float
     cuda_version: float
+    available_disk_space: Quantity
 
     @staticmethod
     def from_dict(dict: Dict[str, Any]) -> 'InstanceOption':
         return InstanceOption(
             instance_id=dict["id"],
             cost_per_hour=dict.get("dph_total_adj", dict.get("dph_total")) * ureg.USD,
+            cpu_ram=dict["cpu_ram"] * ureg.MB,
             num_gpus=dict["num_gpus"],
             gpu_name=dict["gpu_name"],
             gpu_ram_size=dict["gpu_ram"] * ureg.MB,
@@ -71,7 +78,8 @@ class InstanceOption:
             downstream=dict["inet_down"] * ureg.MB / ureg.second,
             upstream=dict["inet_up"] * ureg.MB / ureg.second,
             reliability=dict.get("reliability", dict.get("reliability2", 0.0)),
-            cuda_version=dict["cuda_max_good"]
+            cuda_version=dict["cuda_max_good"],
+            available_disk_space=dict["disk_space"] * ureg.GB
         )
     
     def pretty_str(self, indent: int = 4) -> str:
@@ -80,6 +88,7 @@ class InstanceOption:
         return (
             f"{indent_str}Instance ID: {self.instance_id}\n"
             f"{indent_str}Cost per hour: {self.cost_per_hour.to('USD').magnitude:.2f} USD\n"
+            f"{indent_str}CPU RAM: {self.cpu_ram.to('GB').magnitude:.2f} GB\n"
             f"{indent_str}Num GPUs: {self.num_gpus}\n"
             f"{indent_str}GPU Name: {self.gpu_name}\n"
             f"{indent_str}GPU RAM Size: {self.gpu_ram_size.to('GB').magnitude:.2f} GB\n"
@@ -89,6 +98,7 @@ class InstanceOption:
             f"{indent_str}Upstream: {self.upstream.to('MB/s').magnitude:.2f} MB/s\n"
             f"{indent_str}Reliability: {self.reliability:.2f}\n"
             f"{indent_str}CUDA Version: {self.cuda_version}\n"
+            f"{indent_str}Disk Space: {self.available_disk_space:.2f}\n"
         )
     
     def fulfills(self, instance_spec: InstanceSpec) -> bool:
@@ -131,23 +141,27 @@ class RunningInstanceOption(InstanceOption):
 class InstanceKind(Enum):
     Dev = InstanceSpec(
         max_cost_per_hour=0.5 * ureg.USD,
+        min_cpu_ram_size=64 * ureg.GB,
         num_gpus=1,
         min_reliability=0.9,
         min_gpu_ram_size=15 * ureg.GB,
         min_gpu_ram_bw=700 * ureg.GB / ureg.second,
         min_total_tflops=10 * ureg.teraFLOP / ureg.second,
-        min_downstream=1000.0 * ureg.MB / ureg.second,
-        min_upstream=1000.0 * ureg.MB / ureg.second
+        min_downstream=2000.0 * ureg.MB / ureg.second,
+        min_upstream=2000.0 * ureg.MB / ureg.second,
+        min_disk_space=200 * ureg.GB
     )
     Train = InstanceSpec(
         max_cost_per_hour=4 * ureg.USD,
+        min_cpu_ram_size=128 * ureg.GB,
         num_gpus=1,
         min_reliability=0.95,
         min_gpu_ram_size=40 * ureg.GB,
         min_gpu_ram_bw=3000 * ureg.GB / ureg.second,
         min_total_tflops=30 * ureg.teraFLOP / ureg.second,
         min_downstream=1000 * ureg.MB / ureg.second,
-        min_upstream=1000 * ureg.MB / ureg.second
+        min_upstream=1000 * ureg.MB / ureg.second,
+        min_disk_space=200 * ureg.GB
     )
 
 
@@ -192,7 +206,8 @@ def create_new_instance_from_spec(api: VastAI, instance_kind: InstanceKind) -> i
     create_result = api.create_instance(
         id=instance_option.instance_id,
         template_hash=template_hash,
-        ssh=True
+        ssh=True,
+        disk=instance_kind.value.min_disk_space.to('GB').magnitude
     )
     
     return instance_option.instance_id
@@ -253,6 +268,10 @@ def handle_setup(api: VastAI, instance_kind: InstanceKind) -> RunningInstanceOpt
 async def setup_machine(api: VastAI, github: Github, instance_info: RunningInstanceOption):
     async with SSHSession(instance_info.ssh_host, port=instance_info.ssh_port,
                           username='root', client_keys=['~/.ssh/id_rsa']) as sess:
+        # get python version
+        result = await sess.run('/venv/main/bin/python -V')
+        print(f"python version: {result}")
+        
         # Nvim
         print("Installing nvim")
         result = await sess.run('sudo apt install neovim python3-neovim -y')
@@ -261,12 +280,17 @@ async def setup_machine(api: VastAI, github: Github, instance_info: RunningInsta
         #PyTorch
         print("Installing PyTorch")
         await sess.run('PYTORCH_INDEX_URL=https://download.pytorch.org/whl/cu126')
-        result = await sess.run("pip3 install torch torchvision torchaudio --index-url $PYTORCH_INDEX_URL")
+        result = await sess.run("/venv/main/bin/python -m pip install torch torchvision torchaudio --index-url $PYTORCH_INDEX_URL")
         print(f"result: {result}")
         
         # PyTorch helpers
         print("Installing additional stuff")
-        result = await sess.run("pip3 install packaging ninja wheel setuptools setuptools-scm flash-attn")
+        result = await sess.run("/venv/main/bin/python -m pip install packaging ninja wheel setuptools setuptools-scm")
+        print(f"result: {result}")
+        
+        # Flash Attn
+        print("Installing Flash attention")
+        result = await sess.run("MAX_JOBS=8 /venv/main/bin/python -m pip install flash-attn==2.7.3 --no-build-isolation")
         print(f"result: {result}")
         
         # ECDSA keys
@@ -290,7 +314,7 @@ async def setup_machine(api: VastAI, github: Github, instance_info: RunningInsta
         
         print("Install requirements")
         await sess.run("cd HRM")
-        result = await sess.run("pip3 install -r requirements.txt")
+        result = await sess.run("/venv/main/bin/python -m pip install -r requirements.txt")
         print(f"Result: {result}")
 
 if __name__ == "__main__":
