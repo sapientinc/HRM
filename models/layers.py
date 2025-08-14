@@ -1,31 +1,24 @@
+"""
+Fallback version of layers.py that uses standard PyTorch attention instead of flash_attn
+"""
 from typing import Tuple
 
 import torch
 from torch import nn
 import torch.nn.functional as F
 
-try:
-    from flash_attn_interface import flash_attn_func  # type: ignore[import]
-except ImportError:
-    # Fallback to FlashAttention 2
-    from flash_attn import flash_attn_func  # type: ignore[import]
-
 from models.common import trunc_normal_init_
-
 
 CosSin = Tuple[torch.Tensor, torch.Tensor]
 
-
 def _find_multiple(a, b):
     return (-(a // -b)) * b
-
 
 def rotate_half(x: torch.Tensor):
     """Rotates half the hidden dims of the input."""
     x1 = x[..., : x.shape[-1] // 2]
     x2 = x[..., x.shape[-1] // 2 :]
     return torch.cat((-x2, x1), dim=-1)
-
 
 def apply_rotary_pos_emb(q: torch.Tensor, k: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor):
     # q, k: [bs, seq_len, num_heads, head_dim]
@@ -38,7 +31,6 @@ def apply_rotary_pos_emb(q: torch.Tensor, k: torch.Tensor, cos: torch.Tensor, si
     k_embed = (k * cos.unsqueeze(-2)) + (rotate_half(k) * sin.unsqueeze(-2))
 
     return q_embed.to(orig_dtype), k_embed.to(orig_dtype)
-
 
 class CastedLinear(nn.Module):
     def __init__(self,
@@ -58,7 +50,6 @@ class CastedLinear(nn.Module):
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         return F.linear(input, self.weight.to(input.dtype), bias=self.bias.to(input.dtype) if self.bias is not None else None)
 
-
 class CastedEmbedding(nn.Module):
     def __init__(self,
                  num_embeddings: int,
@@ -76,7 +67,6 @@ class CastedEmbedding(nn.Module):
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         return F.embedding(input, self.embedding_weight.to(self.cast_to))
 
-
 class RotaryEmbedding(nn.Module):
     def __init__(self, dim, max_position_embeddings, base, device=None):
         super().__init__()
@@ -93,7 +83,6 @@ class RotaryEmbedding(nn.Module):
 
     def forward(self):
         return self.cos_cached, self.sin_cached
-
 
 class Attention(nn.Module):
     def __init__(self, hidden_size, head_dim, num_heads, num_key_value_heads, causal=False):
@@ -126,15 +115,34 @@ class Attention(nn.Module):
             cos, sin = cos_sin
             query, key = apply_rotary_pos_emb(query, key, cos, sin)
 
-        # flash attn
-        attn_output = flash_attn_func(q=query, k=key, v=value, causal=self.causal)
-        if isinstance(attn_output, tuple):  # fa2 and fa3 compatibility
-            attn_output = attn_output[0]
+        # Standard PyTorch attention instead of flash_attn
+        # Reshape for attention: [batch_size, num_heads, seq_len, head_dim]
+        query = query.transpose(1, 2)  # [bs, num_heads, seq_len, head_dim]
+        key = key.transpose(1, 2)      # [bs, num_key_value_heads, seq_len, head_dim]
+        value = value.transpose(1, 2)  # [bs, num_key_value_heads, seq_len, head_dim]
+        
+        # Repeat key/value if num_key_value_heads < num_heads (for GQA)
+        if self.num_key_value_heads != self.num_heads:
+            key = key.repeat_interleave(self.num_heads // self.num_key_value_heads, dim=1)
+            value = value.repeat_interleave(self.num_heads // self.num_key_value_heads, dim=1)
 
-        # attn_output: [batch_size, num_heads, seq_len, head_dim]
-        attn_output = attn_output.view(batch_size, seq_len, self.output_size)  # type: ignore
+        # Scaled dot-product attention
+        scale = 1.0 / (self.head_dim ** 0.5)
+        attn_weights = torch.matmul(query, key.transpose(-2, -1)) * scale
+        
+        if self.causal:
+            # Apply causal mask
+            mask = torch.triu(torch.ones(seq_len, seq_len, device=query.device, dtype=torch.bool), diagonal=1)
+            attn_weights.masked_fill_(mask, float('-inf'))
+        
+        attn_weights = F.softmax(attn_weights, dim=-1)
+        attn_output = torch.matmul(attn_weights, value)
+        
+        # Reshape back: [batch_size, seq_len, num_heads, head_dim]
+        attn_output = attn_output.transpose(1, 2).contiguous()
+        attn_output = attn_output.view(batch_size, seq_len, self.output_size)
+        
         return self.o_proj(attn_output)
-
 
 class SwiGLU(nn.Module):
     def __init__(self, hidden_size: int, expansion: float):
@@ -147,7 +155,6 @@ class SwiGLU(nn.Module):
     def forward(self, x):
         gate, up = self.gate_up_proj(x).chunk(2, dim=-1)
         return self.down_proj(F.silu(gate) * up)
-
 
 def rms_norm(hidden_states: torch.Tensor, variance_epsilon: float) -> torch.Tensor:
     input_dtype = hidden_states.dtype

@@ -1,0 +1,18 @@
+╭───────────────────────────────────────────────────╮
+│ ✻ Welcome to Claude Code!                         │
+│                                                   │
+│   /help for help, /status for your current setup  │
+│                                                   │
+│   cwd: /home/tony/Projects/HRM/hrm_code           │
+╰───────────────────────────────────────────────────╯
+● Compact summary (ctrl+r to expand)
+  ⎿  Read fixed_inference_v2.py (263 lines)
+  ⎿  Read fixed_inference.py (262 lines)
+  ⎿  Read models/hrm/hrm_act_v1.py (284 lines)
+  ⎿  Read simple_inference_test.py (144 lines)
+  ⎿  Read test_inference_actual.py (186 lines)
+  ⎿  Todo list read (4 items)
+
+> /compact 
+  ⎿  Compacted. ctrl+r to see full summary
+
