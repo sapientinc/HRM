@@ -9,7 +9,7 @@ import asyncio
 from time import sleep
 from ssh_setup import SSHSession
 from github_config import get_github_api
-from github import Github, AuthenticatedUser
+from github import Github, AuthenticatedUser, GithubException
 
 ureg = UnitRegistry()
 # declare a new “currency” dimension:
@@ -293,10 +293,16 @@ async def setup_machine(api: VastAI, github: Github, instance_info: RunningInsta
         result = await sess.run("MAX_JOBS=8 /venv/main/bin/python -m pip install flash-attn==2.8.2 --no-build-isolation")
         print(f"result: {result}")
         
+        print("Checking for RSA key")
+        key_exists = await sess.run("[[ -e ~/.ssh/id_rsa.pub ]] && echo true || echo false") == "true"
+        print(f"Is key there: {key_exists}")
+        
         # ECDSA keys
-        print("Generating ECDSA keys")
-        result = await sess.run("ssh-keygen -t ecdsa -b 521 -C \"hendrik.leier75@gmail.com\" -f ~/.ssh/id_rsa -N \"\" -q </dev/null")
-        print(f"result: {result}")
+        if not key_exists:
+            print("Generating ECDSA keys")
+            result = await sess.run("ssh-keygen -t ecdsa -b 521 -C \"hendrik.leier75@gmail.com\" -f ~/.ssh/id_rsa -N \"\" -q </dev/null")
+            print(f"result: {result}")
+
         key = await sess.run("cat ~/.ssh/id_rsa.pub")
         
         print(f"key for git: {key}")
@@ -304,8 +310,26 @@ async def setup_machine(api: VastAI, github: Github, instance_info: RunningInsta
         # Add key to github
         print("adding key to github")
         github_user = github.get_user()
-        github_user.create_key(title=f"VastAI box {instance_info.instance_id}", key=key) # type: ignore
-        print("Key added")
+        try:
+            github_user.create_key(title=f"VastAI box {instance_info.instance_id}", key=key) # type: ignore
+            print("Key added")
+        except GithubException as ghe:
+            # On 422 its fine
+            if ghe.status == 422:
+                print(f"Skipping adding the key since it was already there")
+            else:
+                # else throw
+                raise ghe
+        
+        # Adding github.com to the list of known hosts
+        print("Adding 'github.com' to the list of known hosts")
+        result = await sess.run("ssh-keyscan github.com >> ~/.ssh/known_hosts")
+        print("Added keys")
+        
+        print("Change dir to `/workspace`")
+        await sess.run("cd /workspace")
+        result = await sess.run("pwd")
+        print(f"Changed into directory: {result}")
         
         # TODO: Need to add github key to known hosts manually
         # Clone repo
