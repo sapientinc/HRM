@@ -149,51 +149,87 @@ class PuzzleDataset(IterableDataset):
                 start_index += self.config.global_batch_size
 
     def _iter_train(self):
-        for set_name, dataset in self._data.items():  # type: ignore
-            # Increase epoch count
-            self._iters += 1
+        # This method will now be called by the new __iter__ method.
+        # Its logic is being moved into __iter__ to handle workers correctly.
+        # For clarity, we will replace its contents inside __iter__.
+        pass
 
-            # Randomly shuffle groups
-            rng = np.random.Generator(np.random.Philox(seed=self.config.seed + self._iters))
+    def __iter__(self):
+        self._lazy_load_dataset()
+        worker_info = get_worker_info()
+
+        num_workers = worker_info.num_workers if worker_info is not None else 1
+        worker_id = worker_info.id if worker_info is not None else 0
+        
+        # --- TEST MODE LOGIC (NOW PARALLEL-SAFE) ---
+        if self.config.test_set_mode:
+            for set_name, dataset in self._data.items():
+                total_examples = len(dataset["inputs"])
+                
+                # Assign a unique, non-overlapping slice of the test set to each worker
+                per_worker = int(np.ceil(total_examples / float(num_workers)))
+                start_index = worker_id * per_worker
+                end_index = min(start_index + per_worker, total_examples)
+
+                # Each worker now iterates only over its assigned slice
+                current_pos = start_index
+                while current_pos < end_index:
+                    batch_end = min(current_pos + self.local_batch_size, end_index)
+                    
+                    # The logic from the original _iter_test to find puzzle identifiers
+                    puzzle_indices = []
+                    puzzle_index = np.searchsorted(dataset["puzzle_indices"], current_pos, side="right") - 1
+                    for i in range(current_pos, batch_end):
+                        while puzzle_index + 1 < len(dataset["puzzle_indices"]) and i >= dataset["puzzle_indices"][puzzle_index + 1]:
+                            puzzle_index += 1
+                        puzzle_indices.append(puzzle_index)
+                    
+                    batch = self._collate_batch({
+                        "inputs": dataset["inputs"][current_pos:batch_end],
+                        "labels": dataset["labels"][current_pos:batch_end],
+                        "puzzle_identifiers": dataset["puzzle_identifiers"][puzzle_indices]
+                    })
+
+                    yield set_name, batch, self.config.global_batch_size
+                    current_pos = batch_end
+            return # End iteration after test mode is complete
+
+        # --- TRAINING MODE LOGIC (FROM PREVIOUS FIX) ---
+        for set_name, dataset in self._data.items():
+            self._iters += 1
+            seed = self.config.seed + self._iters
+            rng = np.random.Generator(np.random.Philox(seed=seed))
+
+            if (dataset["group_indices"].size - 1) <= 0: continue
 
             group_order = np.concatenate([rng.permutation(dataset["group_indices"].size - 1) for _i in range(self.config.epochs_per_iter)])
-            start_index = 0
             
-            while start_index < group_order.size:
+            per_worker = int(np.ceil(len(group_order) / float(num_workers)))
+            start_idx = worker_id * per_worker
+            end_idx = min(start_idx + per_worker, len(group_order))
+            worker_group_order = group_order[start_idx:end_idx]
+
+            if len(worker_group_order) == 0: continue
+
+            start_index = 0
+            while start_index < len(worker_group_order):
+                batch_size_for_worker = self.local_batch_size
+                
                 start_index, batch_indices, batch_puzzle_indices = _sample_batch(
                     rng,
-                    group_order=group_order,
+                    group_order=worker_group_order,
                     puzzle_indices=dataset["puzzle_indices"],
                     group_indices=dataset["group_indices"],
                     start_index=start_index,
-                    global_batch_size=self.config.global_batch_size,
+                    global_batch_size=batch_size_for_worker,
                 )
 
-                # Select current rank and collate
-                global_effective_batch_size = batch_puzzle_indices.size  # Global effective batch size, excluding pads
+                if batch_puzzle_indices.size == 0: break # Break if no more batches can be formed
 
-                # Drop last batch
-                if global_effective_batch_size < self.config.global_batch_size:
-                    break
-
-                batch_indices        = batch_indices       [self.config.rank * self.local_batch_size: (self.config.rank + 1) * self.local_batch_size]
-                batch_puzzle_indices = batch_puzzle_indices[self.config.rank * self.local_batch_size: (self.config.rank + 1) * self.local_batch_size]
                 batch = self._collate_batch({
                     "inputs": dataset["inputs"][batch_indices],
                     "labels": dataset["labels"][batch_indices],
                     "puzzle_identifiers": dataset["puzzle_identifiers"][batch_puzzle_indices]
                 })
 
-                yield set_name, batch, global_effective_batch_size
-                
-    def __iter__(self):
-        worker_info = get_worker_info()
-        assert worker_info is None or worker_info.num_workers == 1, "Multithreaded data loading is not currently supported."
-        
-        self._lazy_load_dataset()
-        
-        # Iterate using specified mode
-        if self.config.test_set_mode:
-            yield from self._iter_test()
-        else:
-            yield from self._iter_train()
+                yield set_name, batch, self.config.global_batch_size
