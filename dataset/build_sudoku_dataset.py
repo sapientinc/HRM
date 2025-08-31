@@ -58,6 +58,7 @@ def shuffle_sudoku(board: np.ndarray, solution: np.ndarray):
 
 
 def convert_subset(set_name: str, config: DataProcessConfig):
+    print(f"Create {set_name} dataset")
     # Read CSV
     inputs = []
     labels = []
