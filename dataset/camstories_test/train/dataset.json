@@ -1,0 +1,13 @@
+{
+  "pad_id": 1,
+  "ignore_label_id": -100,
+  "blank_identifier_id": 0,
+  "vocab_size": 50265,
+  "seq_len": 255,
+  "num_puzzle_identifiers": 10000,
+  "total_groups": 10000,
+  "mean_puzzle_examples": 1.0,
+  "sets": [
+    "camstories_set"
+  ]
+}
