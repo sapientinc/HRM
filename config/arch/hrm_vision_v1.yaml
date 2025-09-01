@@ -1,0 +1,29 @@
+name: hrm.hrm_vision_v1@HierarchicalReasoningModel_VisionV1
+loss:
+  name: vision_losses@VisionClassificationLossHead
+  loss_type: cross_entropy
+
+# Vision-specific parameters
+num_classes: 10  # CIFAR-10 (change to 100 for CIFAR-100)
+patch_size: 4
+image_size: 32
+
+# ACT parameters (simplified for vision)
+halt_exploration_prob: 0.0  # No exploration needed for vision
+halt_max_steps: 1  # Single forward pass
+
+# Architecture
+H_cycles: 2
+L_cycles: 2
+
+H_layers: 4
+L_layers: 4
+
+hidden_size: 512
+num_heads: 8
+expansion: 4
+
+# Puzzle embeddings (minimal for vision)
+puzzle_emb_ndim: 64
+
+pos_encodings: rope
