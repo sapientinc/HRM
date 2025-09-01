@@ -1,0 +1,21 @@
+name: hrm.hrm_act_v1@HierarchicalReasoningModel_ACTV1
+loss:
+  name: losses@ACTLossHead
+  loss_type: stablemax_cross_entropy
+
+halt_exploration_prob: 0.1
+halt_max_steps: 16
+
+H_cycles: 2
+L_cycles: 2
+
+H_layers: 4
+L_layers: 4
+
+hidden_size: 512
+num_heads: 8  # min(2, hidden_size // 64)
+expansion: 4
+
+puzzle_emb_ndim: ${.hidden_size}
+
+pos_encodings: rope

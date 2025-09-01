@@ -1,0 +1,31 @@
+# ARC training config
+
+defaults:
+  - arch: hrm_v1
+  - _self_
+
+hydra:
+  output_subdir: null
+
+# Data path
+data_path: data/arc-aug-1000
+
+# Hyperparams - Training
+global_batch_size: 768
+
+epochs: 100000
+eval_interval: 10000
+checkpoint_every_eval: True
+
+lr: 1e-4
+lr_min_ratio: 1.0
+lr_warmup_steps: 2000
+
+# Standard hyperparameter settings for LM, as used in Llama
+beta1: 0.9
+beta2: 0.95
+weight_decay: 0.1
+puzzle_emb_weight_decay: 0.1
+
+# Hyperparams - Puzzle embeddings training
+puzzle_emb_lr: 1e-2

@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>ARC‐Converted Dataset Visualizer (Upload Local Folder)</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      margin: 16px;
+    }
+    .selector-area {
+      margin-bottom: 1rem;
+    }
+    .grid-canvas {
+      margin: 4px;
+      border: 1px solid #ccc;
+    }
+    .example-container {
+      display: inline-block;
+      margin: 0 16px 16px 0;
+      vertical-align: top;
+    }
+    .puzzle-display {
+      margin-top: 1rem;
+    }
+    .puzzle-id {
+      font-weight: bold;
+      margin-bottom: 0.5rem;
+    }
+    #groupList, #puzzleList {
+      margin: 1rem 0;
+    }
+    .group-item, .puzzle-item {
+      cursor: pointer;
+      margin: 4px 8px 4px 0;
+      padding: 2px 6px;
+      border: 1px solid #aaa;
+      display: inline-block;
+    }
+    .group-item:hover, .puzzle-item:hover {
+      background: #eef;
+    }
+  </style>
+</head>
+<body>
+<h1>ARC‐Converted Dataset Visualizer (Local Directory)</h1>
+
+<div class="selector-area">
+  <!-- 1) Directory input with webkitdirectory, mozdirectory -->
+  <label>Upload ARC Folder:</label>
+  <input type="file" id="folderInput"
+         webkitdirectory mozdirectory multiple
+         onchange="onFolderSelected(event)" />
+  <br><br>
+
+  <!-- 2) We'll enable set/subset selection after user chooses a folder and data is validated -->
+  <label>Set:</label>
+  <select id="setSelect" disabled>
+    <option value="train">train</option>
+    <option value="test">test</option>
+  </select>
+
+  <label> Subset:</label>
+  <select id="subsetSelect" disabled>
+    <option value="all">all</option>
+  </select>
+
+  <button id="loadBtn" disabled>Load</button>
+</div>
+
+<div>
+  <div id="groupList"></div>
+  <div id="puzzleList"></div>
+  <div class="puzzle-display" id="puzzleView"></div>
+</div>
+
+<!-- 
+   3) Use local 'assets/npyjs.js' from your project folder instead of a CDN.
+   Make sure 'assets/npyjs.js' is the unbundled or UMD version that doesn't
+   contain "import" statements. 
+-->
+<script src="assets/npyjs.js"></script>
+
+<script>
+/***************************************************************************
+ * Global Maps & Variables
+ ***************************************************************************/
+
+// Map from "train/all__inputs.npy" => File, etc.
+let filesByPath = {};
+
+// Once loaded, we store typed arrays for the chosen set/subset
+let inputsArr, labelsArr;
+let puzzleIndicesArr, groupIndicesArr, puzzleIdentifiersArr;
+let identifiersJson;
+
+// The shape of inputs is [N_examples, seqLen], so we discover seqLen & gridSize
+let seqLen = 0;
+let gridSize = 0;
+
+
+/***************************************************************************
+ * 1) Handle folder selection: read all files, find identifiers.json,
+ *    remove topmost folder from each file path, validate.
+ ***************************************************************************/
+function onFolderSelected(event) {
+  filesByPath = {};
+  const fileList = event.target.files;
+  if (!fileList || fileList.length === 0) {
+    alert("No files selected!");
+    return;
+  }
+
+  // We'll gather all webkitRelativePaths
+  const paths = [];
+  for (let i = 0; i < fileList.length; i++) {
+    // Typically "arc-aug-10/train/all__inputs.npy", etc.
+    const file = fileList[i];
+    const relPath = file.webkitRelativePath || file.mozRelativePath || file.name;
+    paths.push(relPath);
+  }
+
+  // 1. Check if we have "identifiers.json" somewhere.
+  const idPath = paths.find(p => p.endsWith("identifiers.json"));
+  if (!idPath) {
+    alert("Error: No 'identifiers.json' found in the uploaded folder.");
+    return;
+  }
+
+  // 2. Derive the top-level directory from that file's path
+  //    e.g. if idPath = "arc-aug-10/identifiers.json", topDir = "arc-aug-10"
+  //    If there's no slash, topDir = "" => do nothing
+  let topDir = "";
+  const lastSlash = idPath.lastIndexOf("/");
+  if (lastSlash >= 0) {
+    topDir = idPath.substring(0, lastSlash);
+  }
+
+  // 3. Rebuild filesByPath with the top folder removed.
+  //    For example, if topDir = "arc-aug-10", then "arc-aug-10/train/all__inputs.npy"
+  //    becomes "train/all__inputs.npy"
+  for (let i = 0; i < fileList.length; i++) {
+    const file = fileList[i];
+    let relPath = file.webkitRelativePath || file.mozRelativePath || file.name;
+    // If relPath starts with "arc-aug-10/", remove that prefix
+    if (topDir && relPath.startsWith(topDir + "/")) {
+      relPath = relPath.substring(topDir.length + 1);
+    }
+    filesByPath[relPath] = file;
+  }
+
+  // Enable set/subset selection and "Load"
+  document.getElementById("setSelect").disabled = false;
+  document.getElementById("subsetSelect").disabled = false;
+  document.getElementById("loadBtn").disabled = false;
+}
+
+// When user clicks "Load," parse the .npy for the chosen set/subset
+document.getElementById("loadBtn").addEventListener("click", async () => {
+  document.getElementById("groupList").innerHTML = "";
+  document.getElementById("puzzleList").innerHTML = "";
+  document.getElementById("puzzleView").innerHTML = "";
+
+  const setName = document.getElementById("setSelect").value;        // e.g. "train"
+  const subsetName = document.getElementById("subsetSelect").value;  // e.g. "all"
+
+  try {
+    await loadDataset(setName, subsetName);
+    buildGroupList(); // show groups
+  } catch (err) {
+    console.error(err);
+    alert("Error while loading dataset: " + err);
+  }
+});
+
+
+/***************************************************************************
+ * 2) Load .npy from local files using Npyjs + FileReader (ArrayBuffer)
+ ***************************************************************************/
+async function loadDataset(setName, subsetName) {
+  const prefix = `${setName}/${subsetName}__`;
+  // e.g. "train/all__inputs.npy"
+  const inputsPath  = prefix + "inputs.npy";
+  const labelsPath  = prefix + "labels.npy";
+  const pIdxPath    = prefix + "puzzle_indices.npy";
+  const gIdxPath    = prefix + "group_indices.npy";
+  const pIdsPath    = prefix + "puzzle_identifiers.npy";
+  const identifiersPath = "identifiers.json";
+
+  // Check existence
+  const needed = [inputsPath, labelsPath, pIdxPath, gIdxPath, pIdsPath, identifiersPath];
+  for (const f of needed) {
+    if (!filesByPath[f]) {
+      throw new Error(`Missing file: ${f}`);
+    }
+  }
+
+  // parseNpy => read from File -> ArrayBuffer -> Npyjs => typed array
+  const inputsNpy       = await parseNpy(filesByPath[inputsPath]);
+  const labelsNpy       = await parseNpy(filesByPath[labelsPath]);
+  const puzzleIndicesNpy= await parseNpy(filesByPath[pIdxPath]);
+  const groupIndicesNpy = await parseNpy(filesByPath[gIdxPath]);
+  const puzzleIdsNpy    = await parseNpy(filesByPath[pIdsPath]);
+
+  inputsArr            = inputsNpy.data;
+  labelsArr            = labelsNpy.data;
+  puzzleIndicesArr     = puzzleIndicesNpy.data;
+  groupIndicesArr      = groupIndicesNpy.data;
+  puzzleIdentifiersArr = puzzleIdsNpy.data;
+
+  // shape e.g. [N_examples, seqLen]
+  seqLen   = inputsNpy.shape[1];
+  gridSize = Math.sqrt(seqLen);
+
+  // read JSON
+  identifiersJson = await readJsonFile(filesByPath[identifiersPath]);
+}
+
+/***************************************************************************
+ * parseNpy => read a File as ArrayBuffer, parse with npyjs
+ ***************************************************************************/
+function parseNpy(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = async () => {
+      try {
+        const arrayBuffer = reader.result;
+        const npy = new npyjs();
+        resolve(await npy.parse(arrayBuffer));
+      } catch (err) {
+        reject(err);
+      }
+    };
+    reader.onerror = err => reject(err);
+    reader.readAsArrayBuffer(file);
+  });
+}
+
+/***************************************************************************
+ * readJsonFile => read a local JSON file into object
+ ***************************************************************************/
+function readJsonFile(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const obj = JSON.parse(reader.result);
+        resolve(obj);
+      } catch (err) {
+        reject(err);
+      }
+    };
+    reader.onerror = (err) => reject(err);
+    reader.readAsText(file);
+  });
+}
+
+/***************************************************************************
+ * 3) Build group list in UI
+ ***************************************************************************/
+function buildGroupList() {
+  document.getElementById("groupList").innerHTML = "<h3>Groups</h3>";
+  const groupListDiv = document.getElementById("groupList");
+
+  const nGroups = groupIndicesArr.length - 1;
+  for (let g = 0; g < nGroups; g++) {
+    const div = document.createElement("span");
+    div.className = "group-item";
+    div.textContent = `Group ${g}`;
+    div.onclick = () => onSelectGroup(g);
+    groupListDiv.appendChild(div);
+  }
+}
+
+/***************************************************************************
+ * onSelectGroup => show puzzles in that group
+ ***************************************************************************/
+function onSelectGroup(groupIndex) {
+  document.getElementById("puzzleList").innerHTML = "";
+  document.getElementById("puzzleView").innerHTML = "";
+
+  const puzzleListDiv = document.getElementById("puzzleList");
+  puzzleListDiv.innerHTML = `<h4>Puzzles in Group ${groupIndex}</h4>`;
+
+  const firstPuzzle = groupIndicesArr[groupIndex];
+  const lastPuzzle  = groupIndicesArr[groupIndex + 1];
+
+  for (let p = firstPuzzle; p < lastPuzzle; p++) {
+    const puzzleIntId = puzzleIdentifiersArr[p];
+    const puzzleStrId = (puzzleIntId < identifiersJson.length)
+                        ? identifiersJson[puzzleIntId]
+                        : "<unknown>";
+
+    const div = document.createElement("span");
+    div.className = "puzzle-item";
+    div.textContent = `Puzzle #${p} [ID=${puzzleIntId}: ${puzzleStrId}]`;
+    div.onclick = () => onSelectPuzzle(p);
+    puzzleListDiv.appendChild(div);
+  }
+}
+
+/***************************************************************************
+ * onSelectPuzzle => show each example
+ ***************************************************************************/
+function onSelectPuzzle(puzzleIndex) {
+  const puzzleView = document.getElementById("puzzleView");
+  puzzleView.innerHTML = "";
+
+  // puzzle ID
+  const puzzleIntId = puzzleIdentifiersArr[puzzleIndex];
+  const puzzleStrId = (puzzleIntId < identifiersJson.length)
+                      ? identifiersJson[puzzleIntId]
+                      : "<unknown>";
+
+  const titleDiv = document.createElement("div");
+  titleDiv.className = "puzzle-id";
+  titleDiv.textContent = `Puzzle #${puzzleIndex} — ID: ${puzzleStrId}`;
+  puzzleView.appendChild(titleDiv);
+
+  // Examples are [puzzleIndicesArr[p], puzzleIndicesArr[p+1])
+  const firstExample = puzzleIndicesArr[puzzleIndex];
+  const lastExample  = puzzleIndicesArr[puzzleIndex + 1];
+
+  for (let e = firstExample; e < lastExample; e++) {
+    const inputSeq  = slice1D(inputsArr,  e*seqLen, (e+1)*seqLen);
+    const outputSeq = slice1D(labelsArr, e*seqLen, (e+1)*seqLen);
+
+    const inputGrid  = decodeGrid(inputSeq);
+    const outputGrid = decodeGrid(outputSeq);
+
+    const exDiv = document.createElement("div");
+    exDiv.className = "example-container";
+    exDiv.appendChild(document.createTextNode(`Example ${e}`));
+    exDiv.appendChild(document.createElement("br"));
+
+    exDiv.appendChild(renderGrid(inputGrid));
+    exDiv.appendChild(renderGrid(outputGrid));
+
+    puzzleView.appendChild(exDiv);
+  }
+}
+
+/***************************************************************************
+ * slice1D => typed array slicing
+ ***************************************************************************/
+function slice1D(arr, start, end) {
+  const result = new Uint32Array(end - start);
+  for (let i = start; i < end; i++) {
+    result[i - start] = Number(arr[i]);
+  }
+  return result;
+}
+
+/***************************************************************************
+ * decodeGrid => turn the flattened seq of length=gridSize^2 into 2D
+ ***************************************************************************/
+function decodeGrid(seq) {
+  const grid = [];
+  let idx = 0;
+  for (let r = 0; r < gridSize; r++) {
+    const row = [];
+    for (let c = 0; c < gridSize; c++) {
+      row.push(seq[idx]);
+      idx++;
+    }
+    grid.push(row);
+  }
+  return grid;
+}
+
+/***************************************************************************
+ * renderGrid => draws a 2D grid to <canvas>
+ ***************************************************************************/
+function renderGrid(grid2d) {
+  const rows = grid2d.length;
+  const cols = grid2d[0].length;
+  const scale = 10;
+
+  const canvas = document.createElement("canvas");
+  canvas.width  = cols * scale;
+  canvas.height = rows * scale;
+  canvas.className = "grid-canvas";
+  const ctx = canvas.getContext("2d");
+
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const val = grid2d[r][c];
+      ctx.fillStyle = indexToColor(val);
+      ctx.fillRect(c * scale, r * scale, scale, scale);
+    }
+  }
+  return canvas;
+}
+
+/***************************************************************************
+ * indexToColor => color palette: 
+ *   0 => pad => white
+ *   1 => eos => light gray
+ *   2..11 => original color(0..9)
+ ***************************************************************************/
+function indexToColor(value) {
+  if (value === 0) return "#FFFFFF"; // pad => white
+  if (value === 1) return "#DDDDDD"; // eos => light gray
+
+  // shift by 2 => original color in [0..9]
+  const colorIdx = value - 2;
+  const palette = [
+    "#000000", // color0 => black
+    "#FF0000", // color1 => red
+    "#00FF00", // color2 => green
+    "#0000FF", // color3 => blue
+    "#FFFF00", // color4 => yellow
+    "#FFA500", // color5 => orange
+    "#800080", // color6 => purple
+    "#00FFFF", // color7 => cyan
+    "#FFC0CB", // color8 => pink
+    "#808080"  // color9 => gray
+  ];
+  if (colorIdx >= 0 && colorIdx < palette.length) {
+    return palette[colorIdx];
+  }
+  return "#FFFFFF"; // fallback
+}
+</script>
+</body>
+</html>

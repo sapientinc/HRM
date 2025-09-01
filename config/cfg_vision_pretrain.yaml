@@ -1,0 +1,33 @@
+# Vision training configuration
+defaults:
+  - arch: hrm_vision_v1
+
+# Data
+data_path: data/cifar-aug-1000
+
+# Hyperparameters
+global_batch_size: 64
+epochs: 100
+
+lr: 1e-4
+lr_min_ratio: 0.1
+lr_warmup_steps: 1000
+
+weight_decay: 0.01
+beta1: 0.9
+beta2: 0.999
+
+# Puzzle embedding (minimal for vision)
+puzzle_emb_lr: 1e-4
+puzzle_emb_weight_decay: 0.01
+
+# Names
+project_name: CIFAR-Vision-HRM
+run_name: null
+checkpoint_path: null
+
+# Extras
+seed: 42
+checkpoint_every_eval: true
+eval_interval: 10
+eval_save_outputs: ["logits", "predictions"]
