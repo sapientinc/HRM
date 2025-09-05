@@ -16,7 +16,16 @@ import coolname
 import hydra
 import pydantic
 from omegaconf import DictConfig
-from adam_atan2 import AdamATan2
+try:
+    from adam_atan2 import AdamATan2
+except ImportError:
+    import warnings
+    from adam_atan2_pytorch import AdamAtan2 as AdamATan2
+    warnings.warn(
+        "adam_atan2 CUDA backend not available. Using adam-atan2-pytorch fallback. "
+        "For potentially better performance with CUDA, install adam_atan2 with CUDA support.",
+        UserWarning
+    )
 
 from puzzle_dataset import PuzzleDataset, PuzzleDatasetConfig, PuzzleDatasetMetadata
 from utils.functions import load_model_class, get_model_source_path
@@ -121,7 +130,8 @@ def create_model(config: PretrainConfig, train_metadata: PuzzleDatasetMetadata, 
     model_cls = load_model_class(config.arch.name)
     loss_head_cls = load_model_class(config.arch.loss.name)
 
-    with torch.device("cuda"):
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    with torch.device(device):
         model: nn.Module = model_cls(model_cfg)
         model = loss_head_cls(model, **config.arch.loss.__pydantic_extra__)  # type: ignore
         if "DISABLE_COMPILE" not in os.environ:
@@ -146,7 +156,7 @@ def create_model(config: PretrainConfig, train_metadata: PuzzleDatasetMetadata, 
         AdamATan2(
             model.parameters(),
 
-            lr=0,  # Needs to be set by scheduler
+            lr=0 if torch.cuda.is_available() else 1e-8,  # CUDA version allows lr=0, fallback needs small value
             weight_decay=config.weight_decay,
             betas=(config.beta1, config.beta2)
         )
@@ -212,11 +222,12 @@ def train_batch(config: PretrainConfig, train_state: TrainState, batch: Any, glo
         return
 
     # To device
-    batch = {k: v.cuda() for k, v in batch.items()}
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    batch = {k: v.to(device) for k, v in batch.items()}
 
     # Init carry if it is None
     if train_state.carry is None:
-        with torch.device("cuda"):
+        with torch.device(device):
             train_state.carry = train_state.model.initial_carry(batch)  # type: ignore
 
     # Forward
@@ -276,8 +287,9 @@ def evaluate(config: PretrainConfig, train_state: TrainState, eval_loader: torch
         carry = None
         for set_name, batch, global_batch_size in eval_loader:
             # To device
-            batch = {k: v.cuda() for k, v in batch.items()}
-            with torch.device("cuda"):
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            batch = {k: v.to(device) for k, v in batch.items()}
+            with torch.device(device):
                 carry = train_state.model.initial_carry(batch)  # type: ignore
 
             # Forward
@@ -300,7 +312,7 @@ def evaluate(config: PretrainConfig, train_state: TrainState, eval_loader: torch
             
             if metric_values is None:
                 metric_keys = list(sorted(metrics.keys()))  # Sort keys to guarantee all processes use the same order.
-                metric_values = torch.zeros((len(set_ids), len(metrics.values())), dtype=torch.float32, device="cuda")
+                metric_values = torch.zeros((len(set_ids), len(metrics.values())), dtype=torch.float32, device=device)
                 
             metric_values[set_id] += torch.stack([metrics[k] for k in metric_keys])
             metric_global_batch_size[set_id] += global_batch_size
@@ -390,7 +402,8 @@ def launch(hydra_config: DictConfig):
         RANK = dist.get_rank()
         WORLD_SIZE = dist.get_world_size()
 
-        torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
+        if torch.cuda.is_available():
+            torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
         
     # Load sync'ed config
     config = load_synced_config(hydra_config, rank=RANK, world_size=WORLD_SIZE)

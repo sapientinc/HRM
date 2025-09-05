@@ -48,9 +48,29 @@ pip3 install flash-attn
 
 ## Install Python Dependencies 🐍
 
+### CUDA Systems (Linux/Windows with GPU)
 ```bash
 pip install -r requirements.txt
 ```
+
+### Apple Silicon & CPU-Only Systems (M1/M2/M3, Intel CPUs) 🍎
+
+For systems without CUDA support, the installation is simpler but requires additional fallback dependencies:
+
+```bash
+# Install core dependencies
+pip install -r requirements.txt
+
+# Install CPU-compatible optimizer (required for training)
+pip install adam-atan2-pytorch
+```
+
+**Important Notes for CPU/Apple Silicon:**
+- FlashAttention and adam-atan2 require CUDA and will not install on CPU-only systems
+- The code automatically detects missing dependencies and uses fallbacks:
+  - FlashAttention → PyTorch native attention (with warning message)
+  - adam-atan2 → adam-atan2-pytorch (CPU-compatible version)
+- Training will work normally but be significantly slower than GPU systems
 
 ## W&B Integration 📈
 
@@ -64,17 +84,34 @@ wandb login
 
 ### Quick Demo: Sudoku Solver 💻🗲
 
-Train a master-level Sudoku AI capable of solving extremely difficult puzzles on a modern laptop GPU. 🧩
+Train a master-level Sudoku AI capable of solving extremely difficult puzzles on a modern laptop GPU or Apple Silicon. 🧩
 
 ```bash
-# Download and build Sudoku dataset
+# Download and build Sudoku dataset (same for all systems)
 python dataset/build_sudoku_dataset.py --output-dir data/sudoku-extreme-1k-aug-1000  --subsample-size 1000 --num-aug 1000
+```
 
+#### CUDA/GPU Training
+```bash
 # Start training (single GPU, smaller batch size)
 OMP_NUM_THREADS=8 python pretrain.py data_path=data/sudoku-extreme-1k-aug-1000 epochs=20000 eval_interval=2000 global_batch_size=384 lr=7e-5 puzzle_emb_lr=7e-5 weight_decay=1.0 puzzle_emb_weight_decay=1.0
 ```
+*Runtime: ~10 hours on a RTX 4070 laptop GPU*
 
-Runtime: ~10 hours on a RTX 4070 laptop GPU
+#### Apple Silicon/CPU Training 🍎
+```bash
+# Quick test (10 epochs to verify everything works)
+DISABLE_COMPILE=1 WANDB_MODE=offline OMP_NUM_THREADS=8 python pretrain.py data_path=data/sudoku-extreme-1k-aug-1000 epochs=10 eval_interval=5 global_batch_size=2 lr=7e-5 puzzle_emb_lr=7e-5 weight_decay=1.0 puzzle_emb_weight_decay=1.0
+
+# Full training (CPU-optimized settings)
+DISABLE_COMPILE=1 WANDB_MODE=offline OMP_NUM_THREADS=8 python pretrain.py data_path=data/sudoku-extreme-1k-aug-1000 epochs=1000 eval_interval=100 global_batch_size=4 lr=7e-5 puzzle_emb_lr=7e-5 weight_decay=1.0 puzzle_emb_weight_decay=1.0
+```
+*Runtime: ~3-4 seconds per training step on Apple M3 Max (~3-5 hours for 1000 epochs)*
+
+**CPU Training Environment Variables:**
+- `DISABLE_COMPILE=1`: Disables PyTorch compilation (required for CPU systems)
+- `WANDB_MODE=offline`: Uses W&B offline mode (avoids authentication issues)
+- Much smaller `global_batch_size` (2-4 vs 384) due to memory constraints
 
 ## Trained Checkpoints 🚧
 
@@ -162,6 +199,7 @@ OMP_NUM_THREADS=8 torchrun --nproc-per-node 8 pretrain.py data_path=data/sudoku-
 
 Evaluate your trained models:
 
+### CUDA/GPU Evaluation
 * Check `eval/exact_accuracy` in W&B.
 * For ARC-AGI, follow these additional steps:
 
@@ -169,7 +207,16 @@ Evaluate your trained models:
 OMP_NUM_THREADS=8 torchrun --nproc-per-node 8 evaluate.py checkpoint=<CHECKPOINT_PATH>
 ```
 
-* Then use the provided `arc_eval.ipynb` notebook to finalize and inspect your results.
+### Apple Silicon/CPU Evaluation 🍎
+* Check `eval/exact_accuracy` in W&B (or offline logs).
+* For evaluation on CPU systems:
+
+```bash
+DISABLE_COMPILE=1 WANDB_MODE=offline OMP_NUM_THREADS=8 python evaluate.py checkpoint=<CHECKPOINT_PATH>
+```
+
+### Jupyter Notebook Analysis
+* Use the provided `arc_eval.ipynb` notebook to finalize and inspect your results (works on all systems).
 
 ## Notes
 
