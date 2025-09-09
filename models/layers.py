@@ -131,7 +131,6 @@ class Attention(nn.Module):
         if isinstance(attn_output, tuple):  # fa2 and fa3 compatibility
             attn_output = attn_output[0]
 
-        # attn_output: [batch_size, num_heads, seq_len, head_dim]
         attn_output = attn_output.view(batch_size, seq_len, self.output_size)  # type: ignore
         return self.o_proj(attn_output)
 
