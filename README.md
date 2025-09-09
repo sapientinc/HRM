@@ -97,10 +97,11 @@ Experiments below assume an 8-GPU setup.
 # Initialize submodules
 git submodule update --init --recursive
 
-# ARC-1
-python dataset/build_arc_dataset.py  # ARC offical + ConceptARC, 960 examples
+# ConceptARC (train only) + ARC-1
+python dataset/build_arc_dataset.py
+
 # ARC-2
-python dataset/build_arc_dataset.py --dataset-dirs dataset/raw-data/ARC-AGI-2/data --output-dir data/arc-2-aug-1000  # ARC-2 official, 1120 examples
+python dataset/build_arc_dataset.py --raw-dataset-dirs dataset/raw-data/ARC-AGI-2/data --processed-dataset-dir data/arc-2-aug-1000  # ARC-2 official, 1120 examples
 
 # Sudoku-Extreme
 python dataset/build_sudoku_dataset.py  # Full version
