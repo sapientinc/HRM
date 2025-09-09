@@ -13,17 +13,18 @@ class CastedSparseEmbedding(nn.Module):
         super().__init__()
         self.cast_to = cast_to
 
+        # --- CORRECTED CODE BLOCK ---
         # Real Weights
-        # Truncated LeCun normal init
-        self.weights = nn.Buffer(
-            trunc_normal_init_(torch.empty((num_embeddings, embedding_dim)), std=init_std), persistent=True
-        )
+        weights_tensor = trunc_normal_init_(torch.empty((num_embeddings, embedding_dim)), std=init_std)
+        self.register_buffer('weights', weights_tensor)
 
         # Local weights and IDs
-        # Local embeddings, with gradient, not persistent
-        self.local_weights = nn.Buffer(torch.zeros(batch_size, embedding_dim, requires_grad=True), persistent=False)
-        # Local embedding IDs, not persistent
-        self.local_ids = nn.Buffer(torch.zeros(batch_size, dtype=torch.int32), persistent=False)
+        local_weights_tensor = torch.zeros(batch_size, embedding_dim, requires_grad=True)
+        self.register_buffer('local_weights', local_weights_tensor, persistent=False)
+
+        local_ids_tensor = torch.zeros(batch_size, dtype=torch.int32)
+        self.register_buffer('local_ids', local_ids_tensor, persistent=False)
+        # --- END OF CORRECTION ---
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         if not self.training:
@@ -81,7 +82,7 @@ class CastedSparseEmbeddingSignSGD_Distributed(Optimizer):
             assert local_weights_grad is not None
             assert local_ids is not None
             assert weights is not None
-        
+    
             # Apply SignSGD
             # Adam ≈ SignSGD if gradient is very sparse
             _sparse_emb_signsgd_dist(
@@ -112,10 +113,10 @@ def _sparse_emb_signsgd_dist(
 
     if world_size > 1:
         all_weights_grad = torch.empty((world_size * N, D), dtype=local_weights_grad.dtype, device=local_weights_grad.device)
-        all_ids = torch.empty(world_size * N,               dtype=local_ids.dtype,          device=local_ids.device)
+        all_ids = torch.empty(world_size * N,           dtype=local_ids.dtype,       device=local_ids.device)
     
         dist.all_gather_into_tensor(all_weights_grad, local_weights_grad)
-        dist.all_gather_into_tensor(all_ids,          local_ids)
+        dist.all_gather_into_tensor(all_ids,           local_ids)
 
     # Unique
     grad_ids, inv = all_ids.unique(return_inverse=True)
