@@ -13,7 +13,11 @@ These results underscore HRM’s potential as a transformative advancement towar
 
 ## Quick Start Guide 🚀
 
-### Prerequisites ⚙️
+### Windows Users 🪟
+
+**For Windows users, we recommend using WSL2 for the best compatibility.** See our comprehensive [Windows WSL2 Setup Guide](SETUP_WINDOWS_WSL2.md) for detailed instructions.
+
+### Prerequisites ⚙️ (Linux/WSL2)
 
 Ensure PyTorch and CUDA are installed. The repo needs CUDA extensions to be built. If not present, run the following commands:
 
