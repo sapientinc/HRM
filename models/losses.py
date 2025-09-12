@@ -35,8 +35,28 @@ def stablemax_cross_entropy(logits, labels, ignore_index: int = -100):
 
 def softmax_cross_entropy(logits, labels, ignore_index: int = -100):
     # Cast logits to f32
-    # Flatten logits
-    return F.cross_entropy(logits.to(torch.float32).view(-1, logits.shape[-1]), labels.to(torch.long).view(-1), ignore_index=ignore_index, reduction="none").view(labels.shape)
+    logits_f32 = logits.to(torch.float32)
+    labels_long = labels.to(torch.long)
+    
+    # Use view for CUDA (fastest), reshape for MPS/CPU (compatibility)
+    # view() is faster but requires contiguous tensors
+    # reshape() handles all cases but has slight overhead
+    if logits.is_cuda and logits_f32.is_contiguous() and labels_long.is_contiguous():
+        # CUDA with contiguous tensors: use view for best performance
+        return F.cross_entropy(
+            logits_f32.view(-1, logits.shape[-1]), 
+            labels_long.view(-1), 
+            ignore_index=ignore_index, 
+            reduction="none"
+        ).view(labels.shape)
+    else:
+        # MPS/CPU or non-contiguous: use reshape for compatibility
+        return F.cross_entropy(
+            logits_f32.reshape(-1, logits.shape[-1]), 
+            labels_long.reshape(-1), 
+            ignore_index=ignore_index, 
+            reduction="none"
+        ).reshape(labels.shape)
 
 
 class ACTLossHead(nn.Module):
@@ -73,11 +93,11 @@ class ACTLossHead(nn.Module):
             metrics = {
                 "count": valid_metrics.sum(),
                 
-                "accuracy":       torch.where(valid_metrics, (is_correct.to(torch.float32) / loss_divisor).sum(-1), 0).sum(),
+                "accuracy":       torch.where(valid_metrics, (is_correct.to(torch.float32) / loss_divisor).sum(-1), torch.zeros_like((is_correct.to(torch.float32) / loss_divisor).sum(-1))).sum(),
                 "exact_accuracy": (valid_metrics & seq_is_correct).sum(),
 
                 "q_halt_accuracy": (valid_metrics & ((outputs["q_halt_logits"] >= 0) == seq_is_correct)).sum(),
-                "steps":          torch.where(valid_metrics, new_carry.steps, 0).sum(),
+                "steps":          torch.where(valid_metrics, new_carry.steps, torch.zeros_like(new_carry.steps)).sum(),
             }
 
         # Losses

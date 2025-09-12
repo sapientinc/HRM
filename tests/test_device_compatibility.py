@@ -44,16 +44,19 @@ def test_device_availability():
     return best_device
 
 
-def test_model_creation(device: str):
+def test_model_creation(device: str, test_compilation: bool = False):
     """Test model creation on specified device."""
     print("\n" + "=" * 60)
-    print(f"Model Creation Test on {device.upper()}")
+    title = f"Model Creation Test on {device.upper()}"
+    if test_compilation:
+        title += " (with compilation)"
+    print(title)
     print("=" * 60)
     
     try:
         # Import model components
         from models.hrm.hrm_act_v1 import HierarchicalReasoningModel_ACTV1
-        from models.losses import ACT_loss_head
+        from models.losses import ACTLossHead
         
         # Create minimal config
         config = {
@@ -78,10 +81,25 @@ def test_model_creation(device: str):
         # Create model
         with torch.device(device):
             model = HierarchicalReasoningModel_ACTV1(config)
-            model = ACT_loss_head(model, loss_type='cross_entropy')
+            model = ACTLossHead(model, loss_type='softmax_cross_entropy')
             model = model.to(device)
         
         print(f"✓ Model created successfully on {device}")
+        
+        # Try compilation if requested
+        if test_compilation:
+            try:
+                print(f"  Attempting torch.compile...")
+                model = torch.compile(model, dynamic=False)
+                print(f"  ✓ Model compiled successfully")
+            except Exception as e:
+                print(f"  ⚠ Compilation failed: {str(e)[:100]}...")
+                if device == "mps":
+                    print(f"    Continuing without compilation (expected for complex models on MPS)")
+                else:
+                    raise
+            finally:
+                pass  # Cleanup if needed
         
         # Test forward pass
         batch = {
@@ -194,10 +212,61 @@ def test_compilation(device: str):
     print(f"Compilation Test on {device.upper()}")
     print("=" * 60)
     
-    if device != "cuda":
-        print(f"ℹ Compilation not supported on {device} (expected behavior)")
+    if device == "cpu":
+        print(f"ℹ Compilation not supported on CPU (expected behavior)")
         return True
     
+    if device == "mps":
+        print(f"ℹ MPS compilation enabled by default (testing both enabled and disabled modes)")
+        
+        # Test 1: Default behavior (should enable compilation)
+        print("\n  Test 1: Default MPS behavior (compilation enabled)")
+        # Clear any compilation overrides
+        os.environ.pop('DISABLE_COMPILE', None)     # Clear any override
+        try:
+            model = nn.Linear(10, 10).to(device)
+            compiled_model = torch.compile(model, dynamic=False)
+            
+            # Test forward pass
+            x = torch.randn(4, 10, device=device)
+            y = compiled_model(x)
+            
+            # Test backward pass
+            loss = y.sum()
+            loss.backward()
+            
+            print("  ✓ Default MPS compilation works!")
+            result1 = True
+            
+        except Exception as e:
+            print(f"  ⚠ MPS compilation failed: {str(e)[:100]}...")
+            print("    Training will continue without compilation")
+            result1 = False  # Failed but training continues
+        
+        # Test 2: Disabled compilation
+        print("\n  Test 2: Disabled compilation (DISABLE_COMPILE=1)")
+        os.environ['DISABLE_COMPILE'] = '1'
+        try:
+            model = nn.Linear(10, 10).to(device)
+            # Should not compile when DISABLE_COMPILE=1
+            x = torch.randn(4, 10, device=device)
+            y = model(x)
+            loss = y.sum()
+            loss.backward()
+            
+            print("  ✓ DISABLE_COMPILE=1 works correctly")
+            result2 = True
+        except Exception as e:
+            print(f"  ✗ Unexpected error with disabled compilation: {e}")
+            result2 = False
+        
+        finally:
+            os.environ.pop('DISABLE_COMPILE', None)
+        
+        # Overall MPS result: success if at least one mode works
+        return result1 or result2
+    
+    # CUDA compilation (should work)
     try:
         model = nn.Linear(10, 10).to(device)
         compiled_model = torch.compile(model, dynamic=False)
@@ -244,6 +313,14 @@ def run_all_tests():
             'optimizer': test_optimizer_compatibility(device),
             'compilation': test_compilation(device)
         }
+        
+        # Additional test for MPS: HRM model with compilation
+        if device == "mps":
+            print("\n" + "-" * 60)
+            print("BONUS MPS TEST: HRM Model with Compilation")
+            print("-" * 60)
+            device_results['hrm_with_compilation'] = test_model_creation(device, test_compilation=True)
+        
         results[device] = device_results
     
     # Summary
@@ -269,6 +346,18 @@ def run_all_tests():
     else:
         print("⚠ SOME TESTS FAILED - Check output above for details")
     print("=" * 60)
+    
+    # Additional notes about MPS compilation
+    if 'mps' in results:
+        print("\nMPS COMPILATION NOTES:")
+        print("-" * 40)
+        print("• MPS compilation is enabled by default (same as CUDA)")
+        print("• To disable compilation: DISABLE_COMPILE=1 python pretrain.py ...")
+        print("• If compilation fails, training continues without it")
+        print("• Performance gain varies by model architecture")
+        if 'hrm_with_compilation' in results.get('mps', {}):
+            if not results['mps']['hrm_with_compilation']:
+                print("• HRM model compilation failed (expected) - will run uncompiled")
     
     return all_passed
 

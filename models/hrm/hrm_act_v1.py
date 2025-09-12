@@ -156,6 +156,8 @@ class HierarchicalReasoningModel_ACTV1_Inner(nn.Module):
             if pad_count > 0:
                 puzzle_embedding = F.pad(puzzle_embedding, (0, pad_count))
 
+            # Ensure puzzle embedding is on the same device as regular embedding before concatenation
+            puzzle_embedding = puzzle_embedding.to(embedding.device)
             embedding = torch.cat((puzzle_embedding.view(-1, self.puzzle_emb_len, self.config.hidden_size), embedding), dim=-2)
 
         # Position embeddings
@@ -166,16 +168,26 @@ class HierarchicalReasoningModel_ACTV1_Inner(nn.Module):
         # Scale
         return self.embed_scale * embedding
 
-    def empty_carry(self, batch_size: int):
+    def empty_carry(self, batch_size: int, device=None):
+        if device is None:
+            device = next(self.parameters()).device
         return HierarchicalReasoningModel_ACTV1InnerCarry(
-            z_H=torch.empty(batch_size, self.config.seq_len + self.puzzle_emb_len, self.config.hidden_size, dtype=self.forward_dtype),
-            z_L=torch.empty(batch_size, self.config.seq_len + self.puzzle_emb_len, self.config.hidden_size, dtype=self.forward_dtype),
+            z_H=torch.empty(batch_size, self.config.seq_len + self.puzzle_emb_len, self.config.hidden_size, dtype=self.forward_dtype, device=device),
+            z_L=torch.empty(batch_size, self.config.seq_len + self.puzzle_emb_len, self.config.hidden_size, dtype=self.forward_dtype, device=device),
         )
         
     def reset_carry(self, reset_flag: torch.Tensor, carry: HierarchicalReasoningModel_ACTV1InnerCarry):
+        # Expand reset_flag for broadcasting
+        reset_mask = reset_flag.view(-1, 1, 1)
+        
+        # Expand H_init and L_init to match carry dimensions if needed
+        # Ensure they're on the same device as the carry tensors
+        h_init_expanded = self.H_init.unsqueeze(0).expand_as(carry.z_H).to(carry.z_H.device)
+        l_init_expanded = self.L_init.unsqueeze(0).expand_as(carry.z_L).to(carry.z_L.device)
+        
         return HierarchicalReasoningModel_ACTV1InnerCarry(
-            z_H=torch.where(reset_flag.view(-1, 1, 1), self.H_init, carry.z_H),
-            z_L=torch.where(reset_flag.view(-1, 1, 1), self.L_init, carry.z_L),
+            z_H=torch.where(reset_mask, h_init_expanded, carry.z_H),
+            z_L=torch.where(reset_mask, l_init_expanded, carry.z_L),
         )
 
     def forward(self, carry: HierarchicalReasoningModel_ACTV1InnerCarry, batch: Dict[str, torch.Tensor]) -> Tuple[HierarchicalReasoningModel_ACTV1InnerCarry, torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
@@ -228,12 +240,14 @@ class HierarchicalReasoningModel_ACTV1(nn.Module):
 
     def initial_carry(self, batch: Dict[str, torch.Tensor]):
         batch_size = batch["inputs"].shape[0]
+        # Get device from batch tensors
+        device = batch["inputs"].device
 
         return HierarchicalReasoningModel_ACTV1Carry(
-            inner_carry=self.inner.empty_carry(batch_size),  # Empty is expected, it will be reseted in first pass as all sequences are halted.
+            inner_carry=self.inner.empty_carry(batch_size, device=device),  # Empty is expected, it will be reseted in first pass as all sequences are halted.
             
-            steps=torch.zeros((batch_size, ), dtype=torch.int32),
-            halted=torch.ones((batch_size, ), dtype=torch.bool),  # Default to halted
+            steps=torch.zeros((batch_size, ), dtype=torch.int32, device=device),
+            halted=torch.ones((batch_size, ), dtype=torch.bool, device=device),  # Default to halted
             
             current_data={k: torch.empty_like(v) for k, v in batch.items()}
         )
@@ -242,9 +256,15 @@ class HierarchicalReasoningModel_ACTV1(nn.Module):
         # Update data, carry (removing halted sequences)
         new_inner_carry = self.inner.reset_carry(carry.halted, carry.inner_carry)
         
-        new_steps = torch.where(carry.halted, 0, carry.steps)
+        # Handle steps update
+        zero_steps = torch.zeros_like(carry.steps)
+        new_steps = torch.where(carry.halted, zero_steps, carry.steps)
 
-        new_current_data = {k: torch.where(carry.halted.view((-1, ) + (1, ) * (batch[k].ndim - 1)), batch[k], v) for k, v in carry.current_data.items()}
+        # Handle current_data update with proper broadcasting
+        new_current_data = {}
+        for k, v in carry.current_data.items():
+            halted_mask = carry.halted.view((-1, ) + (1, ) * (batch[k].ndim - 1))
+            new_current_data[k] = torch.where(halted_mask, batch[k], v)
 
         # Forward inner model
         new_inner_carry, logits, (q_halt_logits, q_continue_logits) = self.inner(new_inner_carry, new_current_data)

@@ -160,7 +160,8 @@ def create_model(config: PretrainConfig, train_metadata: PuzzleDatasetMetadata, 
             print(f"Compiling model with PyTorch torch.compile for CUDA")
             model = torch.compile(model, dynamic=False)  # type: ignore
         elif device == "mps":
-            print(f"PyTorch compilation automatically disabled for MPS (not supported)")
+            print(f"Compiling model with PyTorch torch.compile for MPS")
+            model = torch.compile(model, dynamic=False)  # type: ignore
         else:
             print(f"PyTorch compilation automatically disabled for CPU")
 

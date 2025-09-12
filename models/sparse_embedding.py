@@ -27,11 +27,15 @@ class CastedSparseEmbedding(nn.Module):
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         if not self.training:
             # Test mode, no gradient
-            return self.weights[inputs].to(self.cast_to)
+            # Ensure inputs are on the same device as weights for indexing
+            inputs_on_weights_device = inputs.to(self.weights.device)
+            return self.weights[inputs_on_weights_device].to(self.cast_to)
             
         # Training mode, fill puzzle embedding from weights
         with torch.no_grad():
-            self.local_weights.copy_(self.weights[inputs])
+            # Ensure inputs are on the same device as weights for indexing
+            inputs_on_weights_device = inputs.to(self.weights.device)
+            self.local_weights.copy_(self.weights[inputs_on_weights_device])
             self.local_ids.copy_(inputs)
 
         return self.local_weights.to(self.cast_to)

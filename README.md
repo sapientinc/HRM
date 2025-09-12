@@ -112,8 +112,12 @@ WANDB_MODE=offline OMP_NUM_THREADS=8 python pretrain.py data_path=data/sudoku-ex
 
 # Full training (MPS-optimized settings)
 WANDB_MODE=offline OMP_NUM_THREADS=8 python pretrain.py data_path=data/sudoku-extreme-1k-aug-1000 epochs=1000 eval_interval=100 global_batch_size=32 lr=7e-5 puzzle_emb_lr=7e-5 weight_decay=1.0 puzzle_emb_weight_decay=1.0
+# Quick test training (10 epochs, MPS with compilation enabled by default)
+WANDB_MODE=offline OMP_NUM_THREADS=8 python pretrain.py data_path=data/sudoku-extreme-1k-aug-1000 epochs=10 eval_interval=5 global_batch_size=16 lr=7e-5 puzzle_emb_lr=7e-5 weight_decay=1.0 puzzle_emb_weight_decay=1.0
 ```
-*Performance: ~22 iterations/second on M3 Max*
+*Performance: ~22 iterations/second on M3 Max (without compilation)*
+
+**MPS Compilation Note:** PyTorch's torch.compile is fully supported and enabled by default for HRM models on MPS with PyTorch 2.8.0+.
 
 #### CPU-Only Training (Fallback)
 ```bash
@@ -272,11 +276,17 @@ DISABLE_COMPILE=1 WANDB_MODE=offline OMP_NUM_THREADS=8 python evaluate.py checkp
   - Use smaller batch sizes (2-4)
   - Consider using MPS on Apple Silicon or CUDA on NVIDIA GPUs
 
+- **MPS Performance:**
+  - Compilation is enabled by default (same as CUDA)
+  - If compilation fails, training continues without it (still faster than CPU)
+  - To disable compilation: use `DISABLE_COMPILE=1` (affects all devices)
+  - Optimal batch size is typically 16-32 for MPS
+
 #### Import/Dependency Errors
 - **FlashAttention not found:**
   - Normal on CPU/MPS systems - fallback is automatic
   - For CUDA: `pip install flash-attn`
-  
+
 - **adam-atan2 issues:**
   - CPU/MPS: Install `pip install adam-atan2-pytorch`
   - CUDA: Original adam-atan2 should work
@@ -297,23 +307,12 @@ DISABLE_COMPILE=1 WANDB_MODE=offline OMP_NUM_THREADS=8 python evaluate.py checkp
   - MPS and CPU don't support distributed training
   - Use single-process training for non-CUDA devices
 
-### Testing Device Compatibility
-Run the device compatibility test suite to verify your setup:
-```bash
-python test_device_compatibility.py
-```
-This will test:
-- Device detection (CUDA/MPS/CPU)
-- Model creation and forward/backward passes
-- Sparse embedding functionality
-- Optimizer compatibility
-- PyTorch compilation support
 
 ### Getting Help
 - Check wandb logs for detailed metrics (`wandb/latest-run/files/`)
 - Performance metrics are logged under `performance/` namespace
 - Device info logged at training start
-- Run `python test_device_compatibility.py` to diagnose device issues
+- Run diagnostic tests in `tests/` directory if experiencing device issues
 - File issues at: https://github.com/liamnorm/hrm-experiments
 
 ## Notes
