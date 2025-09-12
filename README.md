@@ -8,6 +8,9 @@ HRM executes sequential reasoning tasks in a single forward pass without explici
 Furthermore, HRM outperforms much larger models with significantly longer context windows on the Abstraction and Reasoning Corpus (ARC), a key benchmark for measuring artificial general intelligence capabilities.
 These results underscore HRM’s potential as a transformative advancement toward universal computation and general-purpose reasoning systems.
 
+**Join our Discord Community: [https://discord.gg/sapient](https://discord.gg/sapient)**
+
+
 ## Quick Start Guide 🚀
 
 ### Prerequisites ⚙️
