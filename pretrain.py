@@ -108,10 +108,20 @@ def create_dataloader(config: PretrainConfig, split: str, rank: int, world_size:
         num_workers=1,
         prefetch_factor=8,
 
-        pin_memory=True,
+        pin_memory=torch.cuda.is_available(),  # Only pin memory for CUDA
         persistent_workers=True
     )
     return dataloader, dataset.metadata
+
+
+def get_device():
+    """Get the best available device (CUDA > MPS > CPU)"""
+    if torch.cuda.is_available():
+        return "cuda"
+    elif torch.backends.mps.is_available() and torch.backends.mps.is_built():
+        return "mps"
+    else:
+        return "cpu"
 
 
 def create_model(config: PretrainConfig, train_metadata: PuzzleDatasetMetadata, world_size: int):
@@ -130,11 +140,12 @@ def create_model(config: PretrainConfig, train_metadata: PuzzleDatasetMetadata, 
     model_cls = load_model_class(config.arch.name)
     loss_head_cls = load_model_class(config.arch.loss.name)
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = get_device()
     with torch.device(device):
         model: nn.Module = model_cls(model_cfg)
         model = loss_head_cls(model, **config.arch.loss.__pydantic_extra__)  # type: ignore
-        if "DISABLE_COMPILE" not in os.environ:
+        # Disable compilation for MPS and CPU
+        if "DISABLE_COMPILE" not in os.environ and device == "cuda":
             model = torch.compile(model, dynamic=False)  # type: ignore
 
         # Broadcast parameters from rank 0
@@ -156,7 +167,7 @@ def create_model(config: PretrainConfig, train_metadata: PuzzleDatasetMetadata, 
         AdamATan2(
             model.parameters(),
 
-            lr=0 if torch.cuda.is_available() else 1e-8,  # CUDA version allows lr=0, fallback needs small value
+            lr=0 if torch.cuda.is_available() else 1e-8,  # CUDA version allows lr=0, MPS/CPU fallback needs small value
             weight_decay=config.weight_decay,
             betas=(config.beta1, config.beta2)
         )
@@ -222,7 +233,7 @@ def train_batch(config: PretrainConfig, train_state: TrainState, batch: Any, glo
         return
 
     # To device
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = get_device()
     batch = {k: v.to(device) for k, v in batch.items()}
 
     # Init carry if it is None
@@ -287,7 +298,7 @@ def evaluate(config: PretrainConfig, train_state: TrainState, eval_loader: torch
         carry = None
         for set_name, batch, global_batch_size in eval_loader:
             # To device
-            device = "cuda" if torch.cuda.is_available() else "cpu"
+            device = get_device()
             batch = {k: v.to(device) for k, v in batch.items()}
             with torch.device(device):
                 carry = train_state.model.initial_carry(batch)  # type: ignore
@@ -397,13 +408,17 @@ def launch(hydra_config: DictConfig):
     # Initialize distributed training if in distributed environment (e.g. torchrun)
     if "LOCAL_RANK" in os.environ:
         # Initialize distributed, default device and dtype
-        dist.init_process_group(backend="nccl")
-
-        RANK = dist.get_rank()
-        WORLD_SIZE = dist.get_world_size()
-
+        # Note: MPS doesn't support distributed training
         if torch.cuda.is_available():
+            dist.init_process_group(backend="nccl")
+
+            RANK = dist.get_rank()
+            WORLD_SIZE = dist.get_world_size()
+
             torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
+        else:
+            # For non-CUDA systems, skip distributed setup
+            print("Distributed training is only supported with CUDA. Running in single-process mode.")
         
     # Load sync'ed config
     config = load_synced_config(hydra_config, rank=RANK, world_size=WORLD_SIZE)
@@ -427,9 +442,15 @@ def launch(hydra_config: DictConfig):
     progress_bar = None
     if RANK == 0:
         progress_bar = tqdm.tqdm(total=train_state.total_steps)
+        
+        # Log device being used
+        device_name = get_device()
+        print(f"Using device: {device_name}")
+        if device_name == "mps":
+            print("Note: MPS (Metal Performance Shaders) acceleration enabled for Apple Silicon")
 
         wandb.init(project=config.project_name, name=config.run_name, config=config.model_dump(), settings=wandb.Settings(_disable_stats=True))  # type: ignore
-        wandb.log({"num_params": sum(x.numel() for x in train_state.model.parameters())}, step=0)
+        wandb.log({"num_params": sum(x.numel() for x in train_state.model.parameters()), "device": device_name}, step=0)
         save_code_and_config(config)
 
     # Training Loop
