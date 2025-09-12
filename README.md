@@ -103,7 +103,7 @@ python dataset/build_sudoku_dataset.py --output-dir data/sudoku-extreme-1k-aug-1
 # Start training (single GPU)
 OMP_NUM_THREADS=8 python pretrain.py data_path=data/sudoku-extreme-1k-aug-1000 epochs=20000 eval_interval=2000 global_batch_size=384 lr=7e-5 puzzle_emb_lr=7e-5 weight_decay=1.0 puzzle_emb_weight_decay=1.0
 ```
-*Performance: Unknown
+*Performance: To be measured (CUDA acceleration available)
 
 #### Apple Silicon MPS Training (Auto-detected) 🍎
 ```bash
@@ -123,11 +123,13 @@ DISABLE_COMPILE=1 WANDB_MODE=offline OMP_NUM_THREADS=8 python pretrain.py data_p
 *Performance: ~3-4 iterations/second*
 
 **Performance Comparison:**
-| Device          | Iterations/sec  | Relative Speed  |
-| --------------- | --------------- | --------------- |
-| RTX 4070 (CUDA) | ?               | Unknown         |
-| M3 Max (MPS)    | ~22             | 1.0x (baseline) |
-| M3 Max (CPU)    | ~3-4            | ~0.16x          |
+| Device          | Iterations/sec  | Batch Size | Relative Speed  |
+| --------------- | --------------- | ---------- | --------------- |
+| CUDA GPUs       | TBD             | TBD        | TBD             |
+| M3 Max (MPS)    | ~22             | 16-32      | 1.0x (baseline) |
+| M3 Max (CPU)    | ~3-4            | 2-4        | ~0.16x          |
+
+*Note: CUDA performance benchmarks to be collected. The codebase supports CUDA acceleration but specific GPU performance has not been measured yet.*
 
 **Training Notes:**
 - Device detection is automatic - no configuration needed
@@ -243,6 +245,76 @@ DISABLE_COMPILE=1 WANDB_MODE=offline OMP_NUM_THREADS=8 python evaluate.py checkp
 
 ### Jupyter Notebook Analysis
 * Use the provided `arc_eval.ipynb` notebook to finalize and inspect your results (works on all systems).
+
+## Troubleshooting 🔧
+
+### Common Issues and Solutions
+
+#### Device Detection Issues
+- **Problem:** Model not using GPU/MPS when available
+- **Solution:** Check PyTorch installation with:
+  ```python
+  import torch
+  print(f"CUDA available: {torch.cuda.is_available()}")
+  print(f"MPS available: {torch.backends.mps.is_available()}")
+  ```
+  Reinstall PyTorch with appropriate backend support if needed.
+
+#### Memory Issues
+- **Out of Memory on GPU/MPS:**
+  - Reduce `global_batch_size` (e.g., from 32 to 16 or 8)
+  - For CUDA: Enable gradient checkpointing if available
+  - For MPS: Batch sizes above 32 may cause issues
+
+#### Performance Issues
+- **Slow training on CPU:**
+  - Ensure `OMP_NUM_THREADS` is set appropriately (usually 8)
+  - Use smaller batch sizes (2-4)
+  - Consider using MPS on Apple Silicon or CUDA on NVIDIA GPUs
+
+#### Import/Dependency Errors
+- **FlashAttention not found:**
+  - Normal on CPU/MPS systems - fallback is automatic
+  - For CUDA: `pip install flash-attn`
+  
+- **adam-atan2 issues:**
+  - CPU/MPS: Install `pip install adam-atan2-pytorch`
+  - CUDA: Original adam-atan2 should work
+
+#### Configuration Issues
+- **Force specific device:**
+  ```yaml
+  # In config/cfg_pretrain.yaml or via command line
+  device: cuda  # or 'mps', 'cpu'
+  ```
+  Or via command line:
+  ```bash
+  python pretrain.py device=cuda ...
+  ```
+
+#### Distributed Training
+- **Multi-GPU only works on CUDA:**
+  - MPS and CPU don't support distributed training
+  - Use single-process training for non-CUDA devices
+
+### Testing Device Compatibility
+Run the device compatibility test suite to verify your setup:
+```bash
+python test_device_compatibility.py
+```
+This will test:
+- Device detection (CUDA/MPS/CPU)
+- Model creation and forward/backward passes
+- Sparse embedding functionality
+- Optimizer compatibility
+- PyTorch compilation support
+
+### Getting Help
+- Check wandb logs for detailed metrics (`wandb/latest-run/files/`)
+- Performance metrics are logged under `performance/` namespace
+- Device info logged at training start
+- Run `python test_device_compatibility.py` to diagnose device issues
+- File issues at: https://github.com/liamnorm/hrm-experiments
 
 ## Notes
 

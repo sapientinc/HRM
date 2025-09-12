@@ -1,5 +1,3 @@
-from typing import Union
-
 import torch
 from torch import nn
 import torch.distributed as dist
@@ -9,21 +7,22 @@ from models.common import trunc_normal_init_
 
 
 class CastedSparseEmbedding(nn.Module):
-    def __init__(self, num_embeddings: int, embedding_dim: int, batch_size: int, init_std: float, cast_to: torch.dtype):
+    def __init__(self, num_embeddings: int, embedding_dim: int, batch_size: int, init_std: float, cast_to: torch.dtype, device: str | torch.device = 'cpu'):
         super().__init__()
         self.cast_to = cast_to
+        self.device = torch.device(device) if isinstance(device, str) else device
 
         # Real Weights
         # Truncated LeCun normal init
         self.weights = nn.Buffer(
-            trunc_normal_init_(torch.empty((num_embeddings, embedding_dim)), std=init_std), persistent=True
+            trunc_normal_init_(torch.empty((num_embeddings, embedding_dim), device=self.device), std=init_std), persistent=True
         )
 
         # Local weights and IDs
         # Local embeddings, with gradient, not persistent
-        self.local_weights = nn.Buffer(torch.zeros(batch_size, embedding_dim, requires_grad=True), persistent=False)
+        self.local_weights = nn.Buffer(torch.zeros(batch_size, embedding_dim, device=self.device, requires_grad=True), persistent=False)
         # Local embedding IDs, not persistent
-        self.local_ids = nn.Buffer(torch.zeros(batch_size, dtype=torch.int32), persistent=False)
+        self.local_ids = nn.Buffer(torch.zeros(batch_size, dtype=torch.int32, device=self.device), persistent=False)
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         if not self.training:
@@ -44,8 +43,9 @@ class CastedSparseEmbeddingSignSGD_Distributed(Optimizer):
         params: ParamsT,
 
         world_size: int,
-        lr: Union[float, torch.Tensor] = 1e-3,
+        lr: float | torch.Tensor = 1e-3,
         weight_decay: float = 1e-2,
+        device: str | torch.device = 'cpu',
     ):
         if not 0.0 <= lr:
             raise ValueError(f"Invalid learning rate: {lr}")
@@ -55,7 +55,8 @@ class CastedSparseEmbeddingSignSGD_Distributed(Optimizer):
         defaults = dict(
             lr=lr,
             weight_decay=weight_decay,
-            world_size=world_size
+            world_size=world_size,
+            device=device
         )
         super().__init__(params, defaults)
 
@@ -91,7 +92,8 @@ class CastedSparseEmbeddingSignSGD_Distributed(Optimizer):
                 
                 lr=group["lr"],
                 weight_decay=group["weight_decay"],
-                world_size=group["world_size"]
+                world_size=group["world_size"],
+                device=group.get("device", "cpu")
             )
 
 
@@ -102,7 +104,8 @@ def _sparse_emb_signsgd_dist(
     
     lr: float,
     weight_decay: float,
-    world_size: int
+    world_size: int,
+    device: str | torch.device = 'cpu'
 ) -> None:
     N, D = local_weights_grad.shape
     
@@ -110,7 +113,8 @@ def _sparse_emb_signsgd_dist(
     all_weights_grad = local_weights_grad
     all_ids = local_ids
 
-    if world_size > 1:
+    # Only use distributed operations on CUDA
+    if world_size > 1 and torch.cuda.is_available() and dist.is_initialized():
         all_weights_grad = torch.empty((world_size * N, D), dtype=local_weights_grad.dtype, device=local_weights_grad.device)
         all_ids = torch.empty(world_size * N,               dtype=local_ids.dtype,          device=local_ids.device)
     

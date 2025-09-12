@@ -77,6 +77,9 @@ class PretrainConfig(pydantic.BaseModel):
     checkpoint_every_eval: bool = False
     eval_interval: Optional[int] = None
     eval_save_outputs: List[str] = []
+    
+    # Device configuration
+    device: Optional[str] = None  # 'cuda', 'mps', 'cpu', or None for auto-detect
 
 
 @dataclass
@@ -140,13 +143,26 @@ def create_model(config: PretrainConfig, train_metadata: PuzzleDatasetMetadata, 
     model_cls = load_model_class(config.arch.name)
     loss_head_cls = load_model_class(config.arch.loss.name)
 
-    device = get_device()
+    # Use configured device or auto-detect
+    device = config.device if config.device else get_device()
+    if config.device:
+        print(f"Using configured device: {device}")
+    else:
+        print(f"Auto-detected device: {device}")
     with torch.device(device):
         model: nn.Module = model_cls(model_cfg)
         model = loss_head_cls(model, **config.arch.loss.__pydantic_extra__)  # type: ignore
-        # Disable compilation for MPS and CPU
-        if "DISABLE_COMPILE" not in os.environ and device == "cuda":
+        
+        # Handle PyTorch compilation based on device
+        if "DISABLE_COMPILE" in os.environ:
+            print(f"PyTorch compilation disabled via DISABLE_COMPILE environment variable")
+        elif device == "cuda":
+            print(f"Compiling model with PyTorch torch.compile for CUDA")
             model = torch.compile(model, dynamic=False)  # type: ignore
+        elif device == "mps":
+            print(f"PyTorch compilation automatically disabled for MPS (not supported)")
+        else:
+            print(f"PyTorch compilation automatically disabled for CPU")
 
         # Broadcast parameters from rank 0
         if world_size > 1:
@@ -162,7 +178,8 @@ def create_model(config: PretrainConfig, train_metadata: PuzzleDatasetMetadata, 
             lr=0,  # Needs to be set by scheduler
             weight_decay=config.puzzle_emb_weight_decay,
 
-            world_size=world_size
+            world_size=world_size,
+            device=device
         ),
         AdamATan2(
             model.parameters(),
@@ -232,8 +249,12 @@ def train_batch(config: PretrainConfig, train_state: TrainState, batch: Any, glo
     if train_state.step > train_state.total_steps:  # At most train_total_steps
         return
 
+    # Start timing
+    import time
+    start_time = time.time()
+    
     # To device
-    device = get_device()
+    device = config.device if config.device else get_device()
     batch = {k: v.to(device) for k, v in batch.items()}
 
     # Init carry if it is None
@@ -263,6 +284,17 @@ def train_batch(config: PretrainConfig, train_state: TrainState, batch: Any, glo
         optim.step()
         optim.zero_grad()
 
+    # Add performance metrics
+    iteration_time = time.time() - start_time
+    
+    # Get memory usage if available
+    memory_used_gb = 0.0
+    if device == "cuda" and torch.cuda.is_available():
+        memory_used_gb = torch.cuda.memory_allocated() / (1024**3)
+    elif device == "mps" and torch.backends.mps.is_available():
+        # MPS doesn't have direct memory query, estimate from batch size
+        memory_used_gb = -1  # Placeholder for "not available"
+    
     # Reduce metrics
     if len(metrics):
         assert not any(v.requires_grad for v in metrics.values())
@@ -282,6 +314,13 @@ def train_batch(config: PretrainConfig, train_state: TrainState, batch: Any, glo
             reduced_metrics = {f"train/{k}": v / (global_batch_size if k.endswith("loss") else count) for k, v in reduced_metrics.items()}
 
             reduced_metrics["train/lr"] = lr_this_step
+            
+            # Add performance metrics
+            reduced_metrics["performance/iteration_time_s"] = iteration_time
+            reduced_metrics["performance/iterations_per_second"] = 1.0 / iteration_time if iteration_time > 0 else 0
+            if memory_used_gb >= 0:
+                reduced_metrics["performance/memory_used_gb"] = memory_used_gb
+            
             return reduced_metrics
 
 

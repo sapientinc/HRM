@@ -117,7 +117,8 @@ class HierarchicalReasoningModel_ACTV1_Inner(nn.Module):
         if self.config.puzzle_emb_ndim > 0:
             # Zero init puzzle embeddings
             self.puzzle_emb = CastedSparseEmbedding(self.config.num_puzzle_identifiers, self.config.puzzle_emb_ndim,
-                                                    batch_size=self.config.batch_size, init_std=0, cast_to=self.forward_dtype)
+                                                    batch_size=self.config.batch_size, init_std=0, cast_to=self.forward_dtype,
+                                                    device='cpu')  # Will be moved to correct device later
 
         # LM Blocks
         if self.config.pos_encodings == "rope":

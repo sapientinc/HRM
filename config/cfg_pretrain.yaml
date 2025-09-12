@@ -29,3 +29,6 @@ puzzle_emb_weight_decay: 0.1
 
 # Hyperparams - Puzzle embeddings training
 puzzle_emb_lr: 1e-2
+
+# Device configuration (optional - auto-detects if not specified)
+# device: cuda  # Options: cuda, mps, cpu, or auto (default)
