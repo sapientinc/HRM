@@ -21,10 +21,10 @@ class HierarchicalReasoningModel_ACTV1InnerCarry:
 @dataclass
 class HierarchicalReasoningModel_ACTV1Carry:
     inner_carry: HierarchicalReasoningModel_ACTV1InnerCarry
-    
+
     steps: torch.Tensor
     halted: torch.Tensor
-    
+
     current_data: Dict[str, torch.Tensor]
 
 
@@ -49,7 +49,7 @@ class HierarchicalReasoningModel_ACTV1Config(BaseModel):
 
     rms_norm_eps: float = 1e-5
     rope_theta: float = 10000.0
-    
+
     # Halting Q-learning config
     halt_max_steps: int
     halt_exploration_prob: float
@@ -133,7 +133,7 @@ class HierarchicalReasoningModel_ACTV1_Inner(nn.Module):
         # Reasoning Layers
         self.H_level = HierarchicalReasoningModel_ACTV1ReasoningModule(layers=[HierarchicalReasoningModel_ACTV1Block(self.config) for _i in range(self.config.H_layers)])
         self.L_level = HierarchicalReasoningModel_ACTV1ReasoningModule(layers=[HierarchicalReasoningModel_ACTV1Block(self.config) for _i in range(self.config.L_layers)])
-        
+
         # Initial states
         self.H_init = nn.Buffer(trunc_normal_init_(torch.empty(self.config.hidden_size, dtype=self.forward_dtype), std=1), persistent=True)
         self.L_init = nn.Buffer(trunc_normal_init_(torch.empty(self.config.hidden_size, dtype=self.forward_dtype), std=1), persistent=True)
@@ -151,7 +151,7 @@ class HierarchicalReasoningModel_ACTV1_Inner(nn.Module):
         # Puzzle embeddings
         if self.config.puzzle_emb_ndim > 0:
             puzzle_embedding = self.puzzle_emb(puzzle_identifiers)
-            
+
             pad_count = self.puzzle_emb_len * self.config.hidden_size - puzzle_embedding.shape[-1]
             if pad_count > 0:
                 puzzle_embedding = F.pad(puzzle_embedding, (0, pad_count))
@@ -175,16 +175,16 @@ class HierarchicalReasoningModel_ACTV1_Inner(nn.Module):
             z_H=torch.empty(batch_size, self.config.seq_len + self.puzzle_emb_len, self.config.hidden_size, dtype=self.forward_dtype, device=device),
             z_L=torch.empty(batch_size, self.config.seq_len + self.puzzle_emb_len, self.config.hidden_size, dtype=self.forward_dtype, device=device),
         )
-        
+
     def reset_carry(self, reset_flag: torch.Tensor, carry: HierarchicalReasoningModel_ACTV1InnerCarry):
         # Expand reset_flag for broadcasting
         reset_mask = reset_flag.view(-1, 1, 1)
-        
+
         # Expand H_init and L_init to match carry dimensions if needed
         # Ensure they're on the same device as the carry tensors
         h_init_expanded = self.H_init.unsqueeze(0).expand_as(carry.z_H).to(carry.z_H.device)
         l_init_expanded = self.L_init.unsqueeze(0).expand_as(carry.z_L).to(carry.z_L.device)
-        
+
         return HierarchicalReasoningModel_ACTV1InnerCarry(
             z_H=torch.where(reset_mask, h_init_expanded, carry.z_H),
             z_L=torch.where(reset_mask, l_init_expanded, carry.z_L),
@@ -222,7 +222,7 @@ class HierarchicalReasoningModel_ACTV1_Inner(nn.Module):
 
         # Q head
         q_logits = self.q_head(z_H[:, 0]).to(torch.float32)
-        
+
         return new_carry, output, (q_logits[..., 0], q_logits[..., 1])
 
 
@@ -245,17 +245,17 @@ class HierarchicalReasoningModel_ACTV1(nn.Module):
 
         return HierarchicalReasoningModel_ACTV1Carry(
             inner_carry=self.inner.empty_carry(batch_size, device=device),  # Empty is expected, it will be reseted in first pass as all sequences are halted.
-            
+
             steps=torch.zeros((batch_size, ), dtype=torch.int32, device=device),
             halted=torch.ones((batch_size, ), dtype=torch.bool, device=device),  # Default to halted
-            
+
             current_data={k: torch.empty_like(v) for k, v in batch.items()}
         )
-        
+
     def forward(self, carry: HierarchicalReasoningModel_ACTV1Carry, batch: Dict[str, torch.Tensor]) -> Tuple[HierarchicalReasoningModel_ACTV1Carry, Dict[str, torch.Tensor]]:
         # Update data, carry (removing halted sequences)
         new_inner_carry = self.inner.reset_carry(carry.halted, carry.inner_carry)
-        
+
         # Handle steps update
         zero_steps = torch.zeros_like(carry.steps)
         new_steps = torch.where(carry.halted, zero_steps, carry.steps)
@@ -274,12 +274,12 @@ class HierarchicalReasoningModel_ACTV1(nn.Module):
             "q_halt_logits": q_halt_logits,
             "q_continue_logits": q_continue_logits
         }
-        
+
         with torch.no_grad():
             # Step
             new_steps = new_steps + 1
             is_last_step = new_steps >= self.config.halt_max_steps
-            
+
             halted = is_last_step
 
             # if training, and ACT is enabled
@@ -298,7 +298,7 @@ class HierarchicalReasoningModel_ACTV1(nn.Module):
                 # As batch_size is large, there're many parallel envs.
                 # Similar concept as PQN https://arxiv.org/abs/2407.04811
                 next_q_halt_logits, next_q_continue_logits = self.inner(new_inner_carry, new_current_data)[-1]
-                
+
                 outputs["target_q_continue"] = torch.sigmoid(torch.where(is_last_step, next_q_halt_logits, torch.maximum(next_q_halt_logits, next_q_continue_logits)))
 
         return HierarchicalReasoningModel_ACTV1Carry(new_inner_carry, new_steps, halted, new_current_data), outputs

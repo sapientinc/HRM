@@ -34,7 +34,7 @@ from models.sparse_embedding import CastedSparseEmbeddingSignSGD_Distributed
 
 class LossConfig(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(extra='allow')
-    
+
     name: str
 
 
@@ -77,7 +77,7 @@ class PretrainConfig(pydantic.BaseModel):
     checkpoint_every_eval: bool = False
     eval_interval: Optional[int] = None
     eval_save_outputs: List[str] = []
-    
+
     # Device configuration
     device: Optional[str] = None  # 'cuda', 'mps', 'cpu', or None for auto-detect
 
@@ -101,7 +101,7 @@ def create_dataloader(config: PretrainConfig, split: str, rank: int, world_size:
 
         rank=rank,
         num_replicas=world_size,
-        
+
         **kwargs
     ), split=split)
     dataloader = DataLoader(
@@ -152,7 +152,7 @@ def create_model(config: PretrainConfig, train_metadata: PuzzleDatasetMetadata, 
     with torch.device(device):
         model: nn.Module = model_cls(model_cfg)
         model = loss_head_cls(model, **config.arch.loss.__pydantic_extra__)  # type: ignore
-        
+
         # Handle PyTorch compilation based on device
         if "DISABLE_COMPILE" in os.environ:
             print(f"PyTorch compilation disabled via DISABLE_COMPILE environment variable")
@@ -175,7 +175,7 @@ def create_model(config: PretrainConfig, train_metadata: PuzzleDatasetMetadata, 
     optimizers = [
         CastedSparseEmbeddingSignSGD_Distributed(
             model.model.puzzle_emb.buffers(),  # type: ignore
-            
+
             lr=0,  # Needs to be set by scheduler
             weight_decay=config.puzzle_emb_weight_decay,
 
@@ -253,7 +253,7 @@ def train_batch(config: PretrainConfig, train_state: TrainState, batch: Any, glo
     # Start timing
     import time
     start_time = time.time()
-    
+
     # To device
     device = config.device if config.device else get_device()
     batch = {k: v.to(device) for k, v in batch.items()}
@@ -273,21 +273,21 @@ def train_batch(config: PretrainConfig, train_state: TrainState, batch: Any, glo
         for param in train_state.model.parameters():
             if param.grad is not None:
                 dist.all_reduce(param.grad)
-            
+
     # Apply optimizer
-    lr_this_step = None    
+    lr_this_step = None
     for optim, base_lr in zip(train_state.optimizers, train_state.optimizer_lrs):
         lr_this_step = compute_lr(base_lr, config, train_state)
 
         for param_group in optim.param_groups:
             param_group['lr'] = lr_this_step
-            
+
         optim.step()
         optim.zero_grad()
 
     # Add performance metrics
     iteration_time = time.time() - start_time
-    
+
     # Get memory usage if available
     memory_used_gb = 0.0
     if device == "cuda" and torch.cuda.is_available():
@@ -295,7 +295,7 @@ def train_batch(config: PretrainConfig, train_state: TrainState, batch: Any, glo
     elif device == "mps" and torch.backends.mps.is_available():
         # MPS doesn't have direct memory query, estimate from batch size
         memory_used_gb = -1  # Placeholder for "not available"
-    
+
     # Reduce metrics
     if len(metrics):
         assert not any(v.requires_grad for v in metrics.values())
@@ -309,32 +309,32 @@ def train_batch(config: PretrainConfig, train_state: TrainState, batch: Any, glo
         if rank == 0:
             metric_values = metric_values.cpu().numpy()
             reduced_metrics = {k: metric_values[i] for i, k in enumerate(metric_keys)}
-            
+
             # Postprocess
             count = max(reduced_metrics["count"], 1)  # Avoid NaNs
             reduced_metrics = {f"train/{k}": v / (global_batch_size if k.endswith("loss") else count) for k, v in reduced_metrics.items()}
 
             reduced_metrics["train/lr"] = lr_this_step
-            
+
             # Add performance metrics
             reduced_metrics["performance/iteration_time_s"] = iteration_time
             reduced_metrics["performance/iterations_per_second"] = 1.0 / iteration_time if iteration_time > 0 else 0
             if memory_used_gb >= 0:
                 reduced_metrics["performance/memory_used_gb"] = memory_used_gb
-            
+
             return reduced_metrics
 
 
 def evaluate(config: PretrainConfig, train_state: TrainState, eval_loader: torch.utils.data.DataLoader, eval_metadata: PuzzleDatasetMetadata, rank: int, world_size: int):
     with torch.inference_mode():
         set_ids = {k: idx for idx, k in enumerate(eval_metadata.sets)}
-        
+
         all_preds = {}
 
         metric_keys = []
         metric_values = None
         metric_global_batch_size = [0 for _ in range(len(set_ids))]
-        
+
         carry = None
         for set_name, batch, global_batch_size in eval_loader:
             # To device
@@ -346,7 +346,7 @@ def evaluate(config: PretrainConfig, train_state: TrainState, eval_loader: torch
             # Forward
             while True:
                 carry, _, metrics, preds, all_finish = train_state.model(carry=carry, batch=batch, return_keys=config.eval_save_outputs)
-                
+
                 if all_finish:
                     break
 
@@ -355,16 +355,16 @@ def evaluate(config: PretrainConfig, train_state: TrainState, eval_loader: torch
                     if k in config.eval_save_outputs:
                         all_preds.setdefault(k, [])
                         all_preds[k].append(v.cpu())  # Move to CPU for saving GPU memory
-                        
+
             del carry, preds, batch, all_finish
 
             # Aggregate
             set_id = set_ids[set_name]
-            
+
             if metric_values is None:
                 metric_keys = list(sorted(metrics.keys()))  # Sort keys to guarantee all processes use the same order.
                 metric_values = torch.zeros((len(set_ids), len(metrics.values())), dtype=torch.float32, device=device)
-                
+
             metric_values[set_id] += torch.stack([metrics[k] for k in metric_keys])
             metric_global_batch_size[set_id] += global_batch_size
 
@@ -379,12 +379,12 @@ def evaluate(config: PretrainConfig, train_state: TrainState, eval_loader: torch
         if metric_values is not None:
             if world_size > 1:
                 dist.reduce(metric_values, dst=0)
-            
+
             if rank == 0:
                 reduced_metrics = metric_values.cpu().numpy()
                 reduced_metrics = {set_name: {metric_name: reduced_metrics[set_id, metric_id] for metric_id, metric_name in enumerate(metric_keys)}
                                    for set_id, set_name in enumerate(set_ids)}
-                
+
                 # Postprocess
                 for set_name, metrics in reduced_metrics.items():
                     count = metrics.pop("count")
@@ -459,7 +459,7 @@ def launch(hydra_config: DictConfig):
         else:
             # For non-CUDA systems, skip distributed setup
             print("Distributed training is only supported with CUDA. Running in single-process mode.")
-        
+
     # Load sync'ed config
     config = load_synced_config(hydra_config, rank=RANK, world_size=WORLD_SIZE)
 
@@ -482,7 +482,7 @@ def launch(hydra_config: DictConfig):
     progress_bar = None
     if RANK == 0:
         progress_bar = tqdm.tqdm(total=train_state.total_steps)
-        
+
         # Log device being used
         device_name = get_device()
         print(f"Using device: {device_name}")
@@ -512,7 +512,7 @@ def launch(hydra_config: DictConfig):
 
         if RANK == 0 and metrics is not None:
             wandb.log(metrics, step=train_state.step)
-            
+
         ############ Checkpointing
         if RANK == 0 and (config.checkpoint_every_eval or (_iter_id == total_iters - 1)):
             save_train_state(config, train_state)

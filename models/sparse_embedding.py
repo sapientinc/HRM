@@ -30,7 +30,7 @@ class CastedSparseEmbedding(nn.Module):
             # Ensure inputs are on the same device as weights for indexing
             inputs_on_weights_device = inputs.to(self.weights.device)
             return self.weights[inputs_on_weights_device].to(self.cast_to)
-            
+
         # Training mode, fill puzzle embedding from weights
         with torch.no_grad():
             # Ensure inputs are on the same device as weights for indexing
@@ -71,7 +71,7 @@ class CastedSparseEmbeddingSignSGD_Distributed(Optimizer):
             local_weights_grad = None
             local_ids = None
             weights = None
-            
+
             assert len(group["params"]) == 3
             for p in group["params"]:
                 if p.requires_grad:
@@ -82,18 +82,18 @@ class CastedSparseEmbeddingSignSGD_Distributed(Optimizer):
                     weights = p
                 else:
                     assert False
-                
+
             assert local_weights_grad is not None
             assert local_ids is not None
             assert weights is not None
-        
+
             # Apply SignSGD
             # Adam ≈ SignSGD if gradient is very sparse
             _sparse_emb_signsgd_dist(
                 local_weights_grad,
                 local_ids,
                 weights,
-                
+
                 lr=group["lr"],
                 weight_decay=group["weight_decay"],
                 world_size=group["world_size"],
@@ -105,14 +105,14 @@ def _sparse_emb_signsgd_dist(
     local_weights_grad: torch.Tensor,
     local_ids: torch.Tensor,
     weights: torch.Tensor,
-    
+
     lr: float,
     weight_decay: float,
     world_size: int,
     device: str | torch.device = 'cpu'
 ) -> None:
     N, D = local_weights_grad.shape
-    
+
     # All-gather
     all_weights_grad = local_weights_grad
     all_ids = local_ids
@@ -121,7 +121,7 @@ def _sparse_emb_signsgd_dist(
     if world_size > 1 and torch.cuda.is_available() and dist.is_initialized():
         all_weights_grad = torch.empty((world_size * N, D), dtype=local_weights_grad.dtype, device=local_weights_grad.device)
         all_ids = torch.empty(world_size * N,               dtype=local_ids.dtype,          device=local_ids.device)
-    
+
         dist.all_gather_into_tensor(all_weights_grad, local_weights_grad)
         dist.all_gather_into_tensor(all_ids,          local_ids)
 

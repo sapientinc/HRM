@@ -37,24 +37,24 @@ def softmax_cross_entropy(logits, labels, ignore_index: int = -100):
     # Cast logits to f32
     logits_f32 = logits.to(torch.float32)
     labels_long = labels.to(torch.long)
-    
+
     # Use view for CUDA (fastest), reshape for MPS/CPU (compatibility)
     # view() is faster but requires contiguous tensors
     # reshape() handles all cases but has slight overhead
     if logits.is_cuda and logits_f32.is_contiguous() and labels_long.is_contiguous():
         # CUDA with contiguous tensors: use view for best performance
         return F.cross_entropy(
-            logits_f32.view(-1, logits.shape[-1]), 
-            labels_long.view(-1), 
-            ignore_index=ignore_index, 
+            logits_f32.view(-1, logits.shape[-1]),
+            labels_long.view(-1),
+            ignore_index=ignore_index,
             reduction="none"
         ).view(labels.shape)
     else:
         # MPS/CPU or non-contiguous: use reshape for compatibility
         return F.cross_entropy(
-            logits_f32.reshape(-1, logits.shape[-1]), 
-            labels_long.reshape(-1), 
-            ignore_index=ignore_index, 
+            logits_f32.reshape(-1, logits.shape[-1]),
+            labels_long.reshape(-1),
+            ignore_index=ignore_index,
             reduction="none"
         ).reshape(labels.shape)
 
@@ -64,7 +64,7 @@ class ACTLossHead(nn.Module):
         super().__init__()
         self.model = model
         self.loss_fn = globals()[loss_type]
-        
+
     def initial_carry(self, *args, **kwargs):
         return self.model.initial_carry(*args, **kwargs)  # type: ignore
 
@@ -87,12 +87,12 @@ class ACTLossHead(nn.Module):
 
             is_correct = mask & (torch.argmax(outputs["logits"], dim=-1) == labels)
             seq_is_correct = is_correct.sum(-1) == loss_counts
-            
+
             # Metrics (halted)
             valid_metrics = new_carry.halted & (loss_counts > 0)
             metrics = {
                 "count": valid_metrics.sum(),
-                
+
                 "accuracy":       torch.where(valid_metrics, (is_correct.to(torch.float32) / loss_divisor).sum(-1), torch.zeros_like((is_correct.to(torch.float32) / loss_divisor).sum(-1))).sum(),
                 "exact_accuracy": (valid_metrics & seq_is_correct).sum(),
 

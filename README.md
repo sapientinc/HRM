@@ -186,7 +186,7 @@ Explore the puzzles visually:
 ARC-1:
 
 ```bash
-OMP_NUM_THREADS=8 torchrun --nproc-per-node 8 pretrain.py 
+OMP_NUM_THREADS=8 torchrun --nproc-per-node 8 pretrain.py
 ```
 
 *Runtime:* ~24 hours
@@ -324,12 +324,12 @@ DISABLE_COMPILE=1 WANDB_MODE=offline OMP_NUM_THREADS=8 python evaluate.py checkp
 
 ```bibtex
 @misc{wang2025hierarchicalreasoningmodel,
-      title={Hierarchical Reasoning Model}, 
+      title={Hierarchical Reasoning Model},
       author={Guan Wang and Jin Li and Yuhao Sun and Xing Chen and Changling Liu and Yue Wu and Meng Lu and Sen Song and Yasin Abbasi Yadkori},
       year={2025},
       eprint={2506.21734},
       archivePrefix={arXiv},
       primaryClass={cs.AI},
-      url={https://arxiv.org/abs/2506.21734}, 
+      url={https://arxiv.org/abs/2506.21734},
 }
 ```
