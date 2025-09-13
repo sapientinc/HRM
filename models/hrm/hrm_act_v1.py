@@ -256,15 +256,8 @@ class HierarchicalReasoningModel_ACTV1(nn.Module):
         # Update data, carry (removing halted sequences)
         new_inner_carry = self.inner.reset_carry(carry.halted, carry.inner_carry)
 
-        # Handle steps update
-        zero_steps = torch.zeros_like(carry.steps)
-        new_steps = torch.where(carry.halted, zero_steps, carry.steps)
-
-        # Handle current_data update with proper broadcasting
-        new_current_data = {}
-        for k, v in carry.current_data.items():
-            halted_mask = carry.halted.view((-1, ) + (1, ) * (batch[k].ndim - 1))
-            new_current_data[k] = torch.where(halted_mask, batch[k], v)
+        new_steps = torch.where(carry.halted, 0, carry.steps)
+        new_current_data = {k: torch.where(carry.halted.view((-1, ) + (1, ) * (batch[k].ndim - 1)), batch[k], v) for k, v in carry.current_data.items()}
 
         # Forward inner model
         new_inner_carry, logits, (q_halt_logits, q_continue_logits) = self.inner(new_inner_carry, new_current_data)
@@ -301,4 +294,5 @@ class HierarchicalReasoningModel_ACTV1(nn.Module):
 
                 outputs["target_q_continue"] = torch.sigmoid(torch.where(is_last_step, next_q_halt_logits, torch.maximum(next_q_halt_logits, next_q_continue_logits)))
 
-        return HierarchicalReasoningModel_ACTV1Carry(new_inner_carry, new_steps, halted, new_current_data), outputs
+        new_carry = HierarchicalReasoningModel_ACTV1Carry(new_inner_carry, new_steps, halted, new_current_data)
+        return new_carry, outputs

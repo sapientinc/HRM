@@ -118,10 +118,13 @@ class PuzzleDataset(IterableDataset):
     def _iter_test(self):
         for set_name, dataset in self._data.items():  # type: ignore
             total_examples = len(dataset["inputs"])
+            total_batches = (total_examples + self.config.global_batch_size - 1) // self.config.global_batch_size  # ceil division
 
             # Load examples one by one
             start_index = 0
+            batch_num = 0
             while start_index < total_examples:
+                batch_num += 1
                 # Compute indices
                 end_index = min(total_examples, start_index + self.config.global_batch_size)
                 
@@ -147,6 +150,7 @@ class PuzzleDataset(IterableDataset):
                 
                 # Advance to next batch
                 start_index += self.config.global_batch_size
+                print(f"(batch_num, total_batches) = ({batch_num, total_batches}); (start_index, total_examples) = ({start_index, total_examples})")
 
     def _iter_train(self):
         for set_name, dataset in self._data.items():  # type: ignore

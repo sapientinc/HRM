@@ -199,7 +199,10 @@ class Attention(nn.Module):
             attn_output = attn_output.view(batch_size, seq_len, self.output_size)  # type: ignore
         else:
             # Fallback attention may not be contiguous due to transpose operations
-            attn_output = attn_output.reshape(batch_size, seq_len, self.output_size)  # type: ignore
+            # Ensure contiguity before using view
+            if not attn_output.is_contiguous():
+                attn_output = attn_output.contiguous()
+            attn_output = attn_output.view(batch_size, seq_len, self.output_size)  # type: ignore
         return self.o_proj(attn_output)
 
 

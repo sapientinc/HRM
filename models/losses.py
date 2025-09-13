@@ -38,25 +38,19 @@ def softmax_cross_entropy(logits, labels, ignore_index: int = -100):
     logits_f32 = logits.to(torch.float32)
     labels_long = labels.to(torch.long)
 
-    # Use view for CUDA (fastest), reshape for MPS/CPU (compatibility)
-    # view() is faster but requires contiguous tensors
-    # reshape() handles all cases but has slight overhead
-    if logits.is_cuda and logits_f32.is_contiguous() and labels_long.is_contiguous():
-        # CUDA with contiguous tensors: use view for best performance
-        return F.cross_entropy(
-            logits_f32.view(-1, logits.shape[-1]),
-            labels_long.view(-1),
-            ignore_index=ignore_index,
-            reduction="none"
-        ).view(labels.shape)
-    else:
-        # MPS/CPU or non-contiguous: use reshape for compatibility
-        return F.cross_entropy(
-            logits_f32.reshape(-1, logits.shape[-1]),
-            labels_long.reshape(-1),
-            ignore_index=ignore_index,
-            reduction="none"
-        ).reshape(labels.shape)
+    if logits.is_cuda:
+        # Ensure tensors are contiguous before using .view()
+        if not logits_f32.is_contiguous():
+            logits_f32 = logits_f32.contiguous()
+        if not labels_long.is_contiguous():
+            labels_long = labels_long.contiguous()
+
+    return F.cross_entropy(
+        logits_f32.view(-1, logits.shape[-1]),
+        labels_long.view(-1),
+        ignore_index=ignore_index,
+        reduction="none"
+    ).view(labels.shape)
 
 
 class ACTLossHead(nn.Module):
