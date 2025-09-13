@@ -16,7 +16,16 @@ import coolname
 import hydra
 import pydantic
 from omegaconf import DictConfig
-from adam_atan2 import AdamATan2
+try:
+    from adam_atan2 import AdamATan2
+except ImportError:
+    import warnings
+    from adam_atan2_pytorch import AdamAtan2 as AdamATan2
+    warnings.warn(
+        "adam_atan2 CUDA backend not available. Using adam-atan2-pytorch fallback. "
+        "For potentially better performance with CUDA, install adam_atan2 with CUDA support.",
+        UserWarning
+    )
 
 from puzzle_dataset import PuzzleDataset, PuzzleDatasetConfig, PuzzleDatasetMetadata
 from utils.functions import load_model_class, get_model_source_path
@@ -25,7 +34,7 @@ from models.sparse_embedding import CastedSparseEmbeddingSignSGD_Distributed
 
 class LossConfig(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(extra='allow')
-    
+
     name: str
 
 
@@ -69,6 +78,9 @@ class PretrainConfig(pydantic.BaseModel):
     eval_interval: Optional[int] = None
     eval_save_outputs: List[str] = []
 
+    # Device configuration
+    device: Optional[str] = None  # 'cuda', 'mps', 'cpu', or None for auto-detect
+
 
 @dataclass
 class TrainState:
@@ -89,7 +101,7 @@ def create_dataloader(config: PretrainConfig, split: str, rank: int, world_size:
 
         rank=rank,
         num_replicas=world_size,
-        
+
         **kwargs
     ), split=split)
     dataloader = DataLoader(
@@ -99,10 +111,20 @@ def create_dataloader(config: PretrainConfig, split: str, rank: int, world_size:
         num_workers=1,
         prefetch_factor=8,
 
-        pin_memory=True,
+        pin_memory=torch.cuda.is_available(),  # Only pin memory for CUDA
         persistent_workers=True
     )
     return dataloader, dataset.metadata
+
+
+def get_device():
+    """Get the best available device (CUDA > MPS > CPU)"""
+    if torch.cuda.is_available():
+        return "cuda"
+    elif torch.backends.mps.is_available() and torch.backends.mps.is_built():
+        return "mps"
+    else:
+        return "cpu"
 
 
 def create_model(config: PretrainConfig, train_metadata: PuzzleDatasetMetadata, world_size: int):
@@ -121,11 +143,27 @@ def create_model(config: PretrainConfig, train_metadata: PuzzleDatasetMetadata, 
     model_cls = load_model_class(config.arch.name)
     loss_head_cls = load_model_class(config.arch.loss.name)
 
-    with torch.device("cuda"):
+    # Use configured device or auto-detect
+    device = config.device if config.device else get_device()
+    if config.device:
+        print(f"Using configured device: {device}")
+    else:
+        print(f"Auto-detected device: {device}")
+    with torch.device(device):
         model: nn.Module = model_cls(model_cfg)
         model = loss_head_cls(model, **config.arch.loss.__pydantic_extra__)  # type: ignore
-        if "DISABLE_COMPILE" not in os.environ:
+
+        # Handle PyTorch compilation based on device
+        if "DISABLE_COMPILE" in os.environ:
+            print(f"PyTorch compilation disabled via DISABLE_COMPILE environment variable")
+        elif device == "cuda":
+            print(f"Compiling model with PyTorch torch.compile for CUDA")
             model = torch.compile(model, dynamic=False)  # type: ignore
+        elif device == "mps":
+            print(f"Compiling model with PyTorch torch.compile for MPS")
+            model = torch.compile(model, dynamic=False)  # type: ignore
+        else:
+            print(f"PyTorch compilation automatically disabled for CPU")
 
         # Broadcast parameters from rank 0
         if world_size > 1:
@@ -137,16 +175,17 @@ def create_model(config: PretrainConfig, train_metadata: PuzzleDatasetMetadata, 
     optimizers = [
         CastedSparseEmbeddingSignSGD_Distributed(
             model.model.puzzle_emb.buffers(),  # type: ignore
-            
+
             lr=0,  # Needs to be set by scheduler
             weight_decay=config.puzzle_emb_weight_decay,
 
-            world_size=world_size
+            world_size=world_size,
+            device=device
         ),
         AdamATan2(
             model.parameters(),
 
-            lr=0,  # Needs to be set by scheduler
+            lr=0 if torch.cuda.is_available() else 1e-8,  # CUDA version allows lr=0, MPS/CPU fallback needs small value
             weight_decay=config.weight_decay,
             betas=(config.beta1, config.beta2)
         )
@@ -211,12 +250,17 @@ def train_batch(config: PretrainConfig, train_state: TrainState, batch: Any, glo
     if train_state.step > train_state.total_steps:  # At most train_total_steps
         return
 
+    # Start timing
+    import time
+    start_time = time.time()
+
     # To device
-    batch = {k: v.cuda() for k, v in batch.items()}
+    device = config.device if config.device else get_device()
+    batch = {k: v.to(device) for k, v in batch.items()}
 
     # Init carry if it is None
     if train_state.carry is None:
-        with torch.device("cuda"):
+        with torch.device(device):
             train_state.carry = train_state.model.initial_carry(batch)  # type: ignore
 
     # Forward
@@ -229,17 +273,28 @@ def train_batch(config: PretrainConfig, train_state: TrainState, batch: Any, glo
         for param in train_state.model.parameters():
             if param.grad is not None:
                 dist.all_reduce(param.grad)
-            
+
     # Apply optimizer
-    lr_this_step = None    
+    lr_this_step = None
     for optim, base_lr in zip(train_state.optimizers, train_state.optimizer_lrs):
         lr_this_step = compute_lr(base_lr, config, train_state)
 
         for param_group in optim.param_groups:
             param_group['lr'] = lr_this_step
-            
+
         optim.step()
         optim.zero_grad()
+
+    # Add performance metrics
+    iteration_time = time.time() - start_time
+
+    # Get memory usage if available
+    memory_used_gb = 0.0
+    if device == "cuda" and torch.cuda.is_available():
+        memory_used_gb = torch.cuda.memory_allocated() / (1024**3)
+    elif device == "mps" and torch.backends.mps.is_available():
+        # MPS doesn't have direct memory query, estimate from batch size
+        memory_used_gb = -1  # Placeholder for "not available"
 
     # Reduce metrics
     if len(metrics):
@@ -254,36 +309,44 @@ def train_batch(config: PretrainConfig, train_state: TrainState, batch: Any, glo
         if rank == 0:
             metric_values = metric_values.cpu().numpy()
             reduced_metrics = {k: metric_values[i] for i, k in enumerate(metric_keys)}
-            
+
             # Postprocess
             count = max(reduced_metrics["count"], 1)  # Avoid NaNs
             reduced_metrics = {f"train/{k}": v / (global_batch_size if k.endswith("loss") else count) for k, v in reduced_metrics.items()}
 
             reduced_metrics["train/lr"] = lr_this_step
+
+            # Add performance metrics
+            reduced_metrics["performance/iteration_time_s"] = iteration_time
+            reduced_metrics["performance/iterations_per_second"] = 1.0 / iteration_time if iteration_time > 0 else 0
+            if memory_used_gb >= 0:
+                reduced_metrics["performance/memory_used_gb"] = memory_used_gb
+
             return reduced_metrics
 
 
 def evaluate(config: PretrainConfig, train_state: TrainState, eval_loader: torch.utils.data.DataLoader, eval_metadata: PuzzleDatasetMetadata, rank: int, world_size: int):
     with torch.inference_mode():
         set_ids = {k: idx for idx, k in enumerate(eval_metadata.sets)}
-        
+
         all_preds = {}
 
         metric_keys = []
         metric_values = None
         metric_global_batch_size = [0 for _ in range(len(set_ids))]
-        
+
         carry = None
         for set_name, batch, global_batch_size in eval_loader:
             # To device
-            batch = {k: v.cuda() for k, v in batch.items()}
-            with torch.device("cuda"):
+            device = get_device()
+            batch = {k: v.to(device) for k, v in batch.items()}
+            with torch.device(device):
                 carry = train_state.model.initial_carry(batch)  # type: ignore
 
             # Forward
             while True:
                 carry, _, metrics, preds, all_finish = train_state.model(carry=carry, batch=batch, return_keys=config.eval_save_outputs)
-                
+
                 if all_finish:
                     break
 
@@ -292,16 +355,16 @@ def evaluate(config: PretrainConfig, train_state: TrainState, eval_loader: torch
                     if k in config.eval_save_outputs:
                         all_preds.setdefault(k, [])
                         all_preds[k].append(v.cpu())  # Move to CPU for saving GPU memory
-                        
+
             del carry, preds, batch, all_finish
 
             # Aggregate
             set_id = set_ids[set_name]
-            
+
             if metric_values is None:
                 metric_keys = list(sorted(metrics.keys()))  # Sort keys to guarantee all processes use the same order.
-                metric_values = torch.zeros((len(set_ids), len(metrics.values())), dtype=torch.float32, device="cuda")
-                
+                metric_values = torch.zeros((len(set_ids), len(metrics.values())), dtype=torch.float32, device=device)
+
             metric_values[set_id] += torch.stack([metrics[k] for k in metric_keys])
             metric_global_batch_size[set_id] += global_batch_size
 
@@ -316,12 +379,12 @@ def evaluate(config: PretrainConfig, train_state: TrainState, eval_loader: torch
         if metric_values is not None:
             if world_size > 1:
                 dist.reduce(metric_values, dst=0)
-            
+
             if rank == 0:
                 reduced_metrics = metric_values.cpu().numpy()
                 reduced_metrics = {set_name: {metric_name: reduced_metrics[set_id, metric_id] for metric_id, metric_name in enumerate(metric_keys)}
                                    for set_id, set_name in enumerate(set_ids)}
-                
+
                 # Postprocess
                 for set_name, metrics in reduced_metrics.items():
                     count = metrics.pop("count")
@@ -385,13 +448,18 @@ def launch(hydra_config: DictConfig):
     # Initialize distributed training if in distributed environment (e.g. torchrun)
     if "LOCAL_RANK" in os.environ:
         # Initialize distributed, default device and dtype
-        dist.init_process_group(backend="nccl")
+        # Note: MPS doesn't support distributed training
+        if torch.cuda.is_available():
+            dist.init_process_group(backend="nccl")
 
-        RANK = dist.get_rank()
-        WORLD_SIZE = dist.get_world_size()
+            RANK = dist.get_rank()
+            WORLD_SIZE = dist.get_world_size()
 
-        torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
-        
+            torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
+        else:
+            # For non-CUDA systems, skip distributed setup
+            print("Distributed training is only supported with CUDA. Running in single-process mode.")
+
     # Load sync'ed config
     config = load_synced_config(hydra_config, rank=RANK, world_size=WORLD_SIZE)
 
@@ -415,8 +483,14 @@ def launch(hydra_config: DictConfig):
     if RANK == 0:
         progress_bar = tqdm.tqdm(total=train_state.total_steps)
 
+        # Log device being used
+        device_name = get_device()
+        print(f"Using device: {device_name}")
+        if device_name == "mps":
+            print("Note: MPS (Metal Performance Shaders) acceleration enabled for Apple Silicon")
+
         wandb.init(project=config.project_name, name=config.run_name, config=config.model_dump(), settings=wandb.Settings(_disable_stats=True))  # type: ignore
-        wandb.log({"num_params": sum(x.numel() for x in train_state.model.parameters())}, step=0)
+        wandb.log({"num_params": sum(x.numel() for x in train_state.model.parameters()), "device": device_name}, step=0)
         save_code_and_config(config)
 
     # Training Loop
@@ -438,7 +512,7 @@ def launch(hydra_config: DictConfig):
 
         if RANK == 0 and metrics is not None:
             wandb.log(metrics, step=train_state.step)
-            
+
         ############ Checkpointing
         if RANK == 0 and (config.checkpoint_every_eval or (_iter_id == total_iters - 1)):
             save_train_state(config, train_state)

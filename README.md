@@ -51,9 +51,36 @@ pip3 install flash-attn
 
 ## Install Python Dependencies 🐍
 
+### Automatic Device Detection 🎯
+
+**HRM automatically detects and uses the best available device in this priority order:**
+1. **CUDA** (NVIDIA GPUs) - Highest performance
+2. **MPS** (Apple Silicon M1/M2/M3) - Good performance on Mac
+3. **CPU** - Fallback for all systems
+
+### CUDA Systems (Linux/Windows with GPU)
 ```bash
 pip install -r requirements.txt
 ```
+
+### Apple Silicon & CPU-Only Systems (M1/M2/M3, Intel CPUs) 🍎
+
+For systems without CUDA support, the installation is simpler but requires additional fallback dependencies:
+
+```bash
+# Install core dependencies
+pip install -r requirements.txt
+
+# Install CPU-compatible optimizer (required for training)
+pip install adam-atan2-pytorch
+```
+
+**Important Notes:**
+- **Apple Silicon (M1/M2/M3):** MPS acceleration is automatically enabled, providing ~5-7x speedup over CPU
+- **Automatic Fallbacks:** The code detects missing CUDA dependencies and uses alternatives:
+  - FlashAttention → PyTorch native attention
+  - adam-atan2 → adam-atan2-pytorch (CPU/MPS-compatible version)
+- **Performance:** CUDA > MPS > CPU (see benchmarks below)
 
 ## W&B Integration 📈
 
@@ -67,17 +94,50 @@ wandb login
 
 ### Quick Demo: Sudoku Solver 💻🗲
 
-Train a master-level Sudoku AI capable of solving extremely difficult puzzles on a modern laptop GPU. 🧩
+Train a master-level Sudoku AI capable of solving extremely difficult puzzles. The system automatically detects your hardware and optimizes accordingly. 🧩
 
 ```bash
-# Download and build Sudoku dataset
+# Download and build Sudoku dataset (same for all systems)
 python dataset/build_sudoku_dataset.py --output-dir data/sudoku-extreme-1k-aug-1000  --subsample-size 1000 --num-aug 1000
-
-# Start training (single GPU, smaller batch size)
-OMP_NUM_THREADS=8 python pretrain.py data_path=data/sudoku-extreme-1k-aug-1000 epochs=20000 eval_interval=2000 global_batch_size=384 lr=7e-5 puzzle_emb_lr=7e-5 weight_decay=1.0 puzzle_emb_weight_decay=1.0
 ```
 
-Runtime: ~10 hours on a RTX 4070 laptop GPU
+#### CUDA/GPU Training (Auto-detected)
+```bash
+# Start training (single GPU)
+OMP_NUM_THREADS=8 python pretrain.py data_path=data/sudoku-extreme-1k-aug-1000 epochs=20000 eval_interval=2000 global_batch_size=384 lr=7e-5 puzzle_emb_lr=7e-5 weight_decay=1.0 puzzle_emb_weight_decay=1.0
+```
+*Performance: To be measured (CUDA acceleration available)
+
+#### Apple Silicon MPS Training (Auto-detected) 🍎
+```bash
+# Full training (MPS-optimized settings)
+WANDB_MODE=offline OMP_NUM_THREADS=8 python pretrain.py data_path=data/sudoku-extreme-1k-aug-1000 epochs=1000 eval_interval=2000 global_batch_size=384 lr=7e-5 puzzle_emb_lr=7e-5 weight_decay=1.0 puzzle_emb_weight_decay=1.0
+```
+*Performance: ~22 iterations/second on M3 Max (without compilation)*
+
+**MPS Compilation Note:** PyTorch's torch.compile is fully supported and enabled by default for HRM models on MPS with PyTorch 2.8.0+.
+
+#### CPU-Only Training (Fallback)
+```bash
+# Force CPU-only mode (if needed)
+DISABLE_COMPILE=1 WANDB_MODE=offline OMP_NUM_THREADS=8 python pretrain.py data_path=data/sudoku-extreme-1k-aug-1000 epochs=1000 eval_interval=100 global_batch_size=4 lr=7e-5 puzzle_emb_lr=7e-5 weight_decay=1.0 puzzle_emb_weight_decay=1.0
+```
+*Performance: ~3-4 iterations/second*
+
+**Performance Comparison:**
+| Device          | Iterations/sec  | Batch Size | Relative Speed  |
+| --------------- | --------------- | ---------- | --------------- |
+| CUDA GPUs       | TBD             | TBD        | TBD             |
+| M3 Max (MPS)    | ~22             | 16-32      | 1.0x (baseline) |
+| M3 Max (CPU)    | ~3-4            | 2-4        | ~0.16x          |
+
+*Note: CUDA performance benchmarks to be collected. The codebase supports CUDA acceleration but specific GPU performance has not been measured yet.*
+
+**Training Notes:**
+- Device detection is automatic - no configuration needed
+- `WANDB_MODE=offline`: Optional for offline training
+- `DISABLE_COMPILE=1`: Only needed to force CPU-only mode
+- Batch sizes are auto-adjusted based on device capabilities
 
 ## Trained Checkpoints 🚧
 
@@ -124,7 +184,7 @@ Explore the puzzles visually:
 ARC-1:
 
 ```bash
-OMP_NUM_THREADS=8 torchrun --nproc-per-node 8 pretrain.py 
+OMP_NUM_THREADS=8 torchrun --nproc-per-node 8 pretrain.py
 ```
 
 *Runtime:* ~24 hours
@@ -165,6 +225,7 @@ OMP_NUM_THREADS=8 torchrun --nproc-per-node 8 pretrain.py data_path=data/sudoku-
 
 Evaluate your trained models:
 
+### CUDA/GPU Evaluation
 * Check `eval/exact_accuracy` in W&B.
 * For ARC-AGI, follow these additional steps:
 
@@ -172,7 +233,85 @@ Evaluate your trained models:
 OMP_NUM_THREADS=8 torchrun --nproc-per-node 8 evaluate.py checkpoint=<CHECKPOINT_PATH>
 ```
 
-* Then use the provided `arc_eval.ipynb` notebook to finalize and inspect your results.
+### MPS/CPU Evaluation 🍎
+* Check `eval/exact_accuracy` in W&B (or offline logs).
+* The system automatically detects and uses the best available device:
+
+```bash
+# Auto-detects CUDA/MPS/CPU and uses the best available
+WANDB_MODE=offline OMP_NUM_THREADS=8 python evaluate.py checkpoint=<CHECKPOINT_PATH>
+
+# Force CPU-only evaluation (if needed)
+DISABLE_COMPILE=1 WANDB_MODE=offline OMP_NUM_THREADS=8 python evaluate.py checkpoint=<CHECKPOINT_PATH>
+```
+
+### Jupyter Notebook Analysis
+* Use the provided `arc_eval.ipynb` notebook to finalize and inspect your results (works on all systems).
+
+## Troubleshooting 🔧
+
+### Common Issues and Solutions
+
+#### Device Detection Issues
+- **Problem:** Model not using GPU/MPS when available
+- **Solution:** Check PyTorch installation with:
+  ```python
+  import torch
+  print(f"CUDA available: {torch.cuda.is_available()}")
+  print(f"MPS available: {torch.backends.mps.is_available()}")
+  ```
+  Reinstall PyTorch with appropriate backend support if needed.
+
+#### Memory Issues
+- **Out of Memory on GPU/MPS:**
+  - Reduce `global_batch_size` (e.g., from 32 to 16 or 8)
+  - For CUDA: Enable gradient checkpointing if available
+  - For MPS: Batch sizes above 32 may cause issues
+
+#### Performance Issues
+- **Slow training on CPU:**
+  - Ensure `OMP_NUM_THREADS` is set appropriately (usually 8)
+  - Use smaller batch sizes (2-4)
+  - Consider using MPS on Apple Silicon or CUDA on NVIDIA GPUs
+
+- **MPS Performance:**
+  - Compilation is enabled by default (same as CUDA)
+  - If compilation fails, training continues without it (still faster than CPU)
+  - To disable compilation: use `DISABLE_COMPILE=1` (affects all devices)
+  - Optimal batch size is typically 16-32 for MPS
+
+#### Import/Dependency Errors
+- **FlashAttention not found:**
+  - Normal on CPU/MPS systems - fallback is automatic
+  - For CUDA: `pip install flash-attn`
+
+- **adam-atan2 issues:**
+  - CPU/MPS: Install `pip install adam-atan2-pytorch`
+  - CUDA: Original adam-atan2 should work
+
+#### Configuration Issues
+- **Force specific device:**
+  ```yaml
+  # In config/cfg_pretrain.yaml or via command line
+  device: cuda  # or 'mps', 'cpu'
+  ```
+  Or via command line:
+  ```bash
+  python pretrain.py device=cuda ...
+  ```
+
+#### Distributed Training
+- **Multi-GPU only works on CUDA:**
+  - MPS and CPU don't support distributed training
+  - Use single-process training for non-CUDA devices
+
+
+### Getting Help
+- Check wandb logs for detailed metrics (`wandb/latest-run/files/`)
+- Performance metrics are logged under `performance/` namespace
+- Device info logged at training start
+- Run diagnostic tests in `tests/` directory if experiencing device issues
+- File issues at: https://github.com/liamnorm/hrm-experiments
 
 ## Notes
 
@@ -183,12 +322,12 @@ OMP_NUM_THREADS=8 torchrun --nproc-per-node 8 evaluate.py checkpoint=<CHECKPOINT
 
 ```bibtex
 @misc{wang2025hierarchicalreasoningmodel,
-      title={Hierarchical Reasoning Model}, 
+      title={Hierarchical Reasoning Model},
       author={Guan Wang and Jin Li and Yuhao Sun and Xing Chen and Changling Liu and Yue Wu and Meng Lu and Sen Song and Yasin Abbasi Yadkori},
       year={2025},
       eprint={2506.21734},
       archivePrefix={arXiv},
       primaryClass={cs.AI},
-      url={https://arxiv.org/abs/2506.21734}, 
+      url={https://arxiv.org/abs/2506.21734},
 }
 ```
