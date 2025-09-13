@@ -110,13 +110,8 @@ OMP_NUM_THREADS=8 python pretrain.py data_path=data/sudoku-extreme-1k-aug-1000 e
 
 #### Apple Silicon MPS Training (Auto-detected) 🍎
 ```bash
-# Quick test (10 epochs to verify everything works)
-WANDB_MODE=offline OMP_NUM_THREADS=8 python pretrain.py data_path=data/sudoku-extreme-1k-aug-1000 epochs=10 eval_interval=5 global_batch_size=16 lr=7e-5 puzzle_emb_lr=7e-5 weight_decay=1.0 puzzle_emb_weight_decay=1.0
-
 # Full training (MPS-optimized settings)
-WANDB_MODE=offline OMP_NUM_THREADS=8 python pretrain.py data_path=data/sudoku-extreme-1k-aug-1000 epochs=1000 eval_interval=100 global_batch_size=32 lr=7e-5 puzzle_emb_lr=7e-5 weight_decay=1.0 puzzle_emb_weight_decay=1.0
-# Quick test training (10 epochs, MPS with compilation enabled by default)
-WANDB_MODE=offline OMP_NUM_THREADS=8 python pretrain.py data_path=data/sudoku-extreme-1k-aug-1000 epochs=10 eval_interval=5 global_batch_size=16 lr=7e-5 puzzle_emb_lr=7e-5 weight_decay=1.0 puzzle_emb_weight_decay=1.0
+WANDB_MODE=offline OMP_NUM_THREADS=8 python pretrain.py data_path=data/sudoku-extreme-1k-aug-1000 epochs=1000 eval_interval=2000 global_batch_size=384 lr=7e-5 puzzle_emb_lr=7e-5 weight_decay=1.0 puzzle_emb_weight_decay=1.0
 ```
 *Performance: ~22 iterations/second on M3 Max (without compilation)*
 
