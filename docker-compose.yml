@@ -1,0 +1,92 @@
+version: '3.8'
+
+services:
+  # HRM training service with FlashAttention 2 (Ampere GPUs)
+  hrm-train-fa2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        FLASH_ATTN_VERSION: "2"
+    image: hrm:latest-fa2
+    container_name: hrm-train-fa2
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - CUDA_VISIBLE_DEVICES=0
+      - WANDB_API_KEY=${WANDB_API_KEY}
+      - OMP_NUM_THREADS=8
+    volumes:
+      - ./data:/app/data
+      - ./checkpoints:/app/checkpoints
+      - ./wandb:/app/wandb
+      - ./config:/app/config
+    working_dir: /app
+    command: >
+      bash -c "echo 'HRM Training Environment Ready (FlashAttention 2)' &&
+      python -c 'import torch; print(f\"CUDA available: {torch.cuda.is_available()}\"); print(f\"CUDA devices: {torch.cuda.device_count()}\")' &&
+      /bin/bash"
+    stdin_open: true
+    tty: true
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # HRM training service with FlashAttention 3 (Hopper GPUs)
+  hrm-train-fa3:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        FLASH_ATTN_VERSION: "3"
+    image: hrm:latest-fa3
+    container_name: hrm-train-fa3
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - CUDA_VISIBLE_DEVICES=0
+      - WANDB_API_KEY=${WANDB_API_KEY}
+      - OMP_NUM_THREADS=8
+    volumes:
+      - ./data:/app/data
+      - ./checkpoints:/app/checkpoints
+      - ./wandb:/app/wandb
+      - ./config:/app/config
+    working_dir: /app
+    command: >
+      bash -c "echo 'HRM Training Environment Ready (FlashAttention 3)' &&
+      python -c 'import torch; print(f\"CUDA available: {torch.cuda.is_available()}\"); print(f\"CUDA devices: {torch.cuda.device_count()}\")' &&
+      /bin/bash"
+    stdin_open: true
+    tty: true
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # Development service (no GPU required for code development)
+  hrm-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: builder
+    image: hrm:dev
+    container_name: hrm-dev
+    environment:
+      - PYTHONPATH=/app/src
+    volumes:
+      - ./src:/app/src
+      - ./tests:/app/tests
+      - ./config:/app/config
+      - ./pyproject.toml:/app/pyproject.toml
+    working_dir: /app
+    command: /bin/bash
+    stdin_open: true
+    tty: true

@@ -1,0 +1,65 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Git
+.git/
+.gitignore
+.gitmodules
+.gitattributes
+
+# Documentation
+docs/_build/
+*.md
+!README.md
+
+# Data and checkpoints (too large for image)
+data/
+checkpoints/
+wandb/
+cache/
+
+# Tests
+tests/
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# CI/CD
+.github/
+.pre-commit-config.yaml
+
+# Notebooks
+*.ipynb
+.ipynb_checkpoints/
+
+# Temporary files
+*.log
+*.tmp
+.DS_Store
+Thumbs.db
+
+# Package files
+*.tar.gz
+*.whl

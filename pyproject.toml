@@ -1,0 +1,218 @@
+[project]
+name = "hierarchical-reasoning-model"
+version = "0.1.0"
+description = "Hierarchical Reasoning Model: A novel recurrent neural network for sequential reasoning tasks"
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [
+    { name = "Guan Wang" },
+    { name = "Jin Li" },
+    { name = "Yuhao Sun" },
+    { name = "Xing Chen" },
+    { name = "Changling Liu" },
+    { name = "Yue Wu" },
+    { name = "Meng Lu" },
+    { name = "Sen Song" },
+    { name = "Yasin Abbasi Yadkori" },
+    { name = "Zachary Bloss", email = "zacharybloss@gmail.com" }
+]
+maintainers = [
+    { name = "Zachary Bloss", email = "zacharybloss@gmail.com" }
+]
+requires-python = ">=3.10,<3.14"
+keywords = [
+    "deep-learning",
+    "neural-networks",
+    "reasoning",
+    "transformers",
+    "hierarchical-models",
+    "arc-agi",
+    "pytorch"
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+# Core runtime dependencies
+dependencies = [
+    "torch>=2.0.0",
+    "adam-atan2>=0.0.1",
+    "einops>=0.7.0",
+    "pydantic>=2.0.0",
+    "numpy>=1.24.0",
+    "wandb>=0.22.1",
+    "python-dotenv>=1.1.1",
+]
+
+[project.optional-dependencies]
+# Training dependencies
+train = [
+    "tqdm>=4.65.0",
+    "coolname>=2.0.0",
+    "wandb>=0.15.0",
+    "omegaconf>=2.3.0",
+    "hydra-core>=1.3.0",
+]
+
+# Dataset building dependencies
+data = [
+    "argdantic>=0.3.0",
+    "huggingface_hub>=0.19.0",
+    "datasets>=4.1.1",
+    "tqdm>=4.65.0",
+]
+
+# Development dependencies
+dev = [
+    "ruff>=0.8.0",
+    "pytest>=8.0.0",
+    "pytest-cov>=6.0.0",
+    "pytest-xdist>=3.5.0",
+    "mypy>=1.8.0",
+]
+
+# Notebook dependencies
+notebooks = [
+    "jupyter>=1.0.0",
+    "matplotlib>=3.8.0",
+    "ipywidgets>=8.1.0",
+]
+
+# Complete installation (all features)
+all = [
+    "hierarchical-reasoning-model[train,data,notebooks]",
+]
+
+[project.urls]
+Homepage = "https://github.com/liujch1998/HRM"
+Documentation = "https://github.com/liujch1998/HRM#readme"
+Repository = "https://github.com/liujch1998/HRM"
+"Bug Tracker" = "https://github.com/liujch1998/HRM/issues"
+
+[project.scripts]
+hrm = "hierarchical_reasoning_model.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/hierarchical_reasoning_model"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src",
+    "/README.md",
+    "/LICENSE",
+]
+
+# Ruff configuration
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # pyflakes
+    "I",      # isort
+    "N",      # pep8-naming
+    "UP",     # pyupgrade
+    "B",      # flake8-bugbear
+    "C4",     # flake8-comprehensions
+    "SIM",    # flake8-simplify
+    "TCH",    # flake8-type-checking
+]
+ignore = [
+    "E501",   # Line too long (handled by formatter)
+    "B008",   # Do not perform function call in argument defaults
+    "B905",   # `zip()` without an explicit `strict=` parameter
+]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]  # Allow unused imports in __init__.py
+"tests/**/*.py" = ["S101"]  # Allow assert in tests
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "auto"
+
+# Pytest configuration
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "--verbose",
+    "--strict-markers",
+    "--strict-config",
+    "--cov=src/hierarchical_reasoning_model",
+    "--cov-report=term-missing",
+    "--cov-report=html",
+    "--cov-report=xml",
+]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests as integration tests",
+    "unit: marks tests as unit tests",
+]
+
+# Coverage configuration
+[tool.coverage.run]
+source = ["src"]
+omit = [
+    "*/tests/*",
+    "*/__pycache__/*",
+    "*/.venv/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "@abstractmethod",
+]
+
+# MyPy configuration
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+check_untyped_defs = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+strict_equality = true
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = [
+    "torch.*",
+    "wandb.*",
+    "hydra.*",
+    "omegaconf.*",
+    "flash_attn.*",
+    "flash_attn_interface.*",
+    "adam_atan2.*",
+    "coolname.*",
+]
+ignore_missing_imports = true
