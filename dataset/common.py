@@ -49,3 +49,27 @@ def dihedral_transform(arr: np.ndarray, tid: int) -> np.ndarray:
     
 def inverse_dihedral_transform(arr: np.ndarray, tid: int) -> np.ndarray:
     return dihedral_transform(arr, DIHEDRAL_INVERSE[tid])
+
+
+def split_puzzles_by_id(puzzle_ids: List[str], test_fraction: float = 0.2, seed: int = 42) -> tuple[set[str], set[str]]:
+    """Split puzzle IDs into train and test sets to avoid data leakage.
+    
+    Args:
+        puzzle_ids: List of puzzle identifiers
+        test_fraction: Fraction of puzzles to reserve for testing
+        seed: Random seed for reproducible splits
+        
+    Returns:
+        Tuple of (train_puzzle_ids, test_puzzle_ids)
+    """
+    import random
+    random.seed(seed)
+    
+    shuffled_ids = puzzle_ids.copy()
+    random.shuffle(shuffled_ids)
+    
+    num_test = int(len(shuffled_ids) * test_fraction)
+    test_ids = set(shuffled_ids[:num_test])
+    train_ids = set(shuffled_ids[num_test:])
+    
+    return train_ids, test_ids

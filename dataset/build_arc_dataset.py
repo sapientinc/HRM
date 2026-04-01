@@ -146,11 +146,8 @@ def convert_single_arc_puzzle(results: dict, default_name: str, puzzle: dict, au
 
 
 def load_puzzles_arcagi(results: dict, dataset_path: str, config: DataProcessConfig):
-    train_examples_dest = ("train", "all")
-    test_examples_map = {
-        "evaluation": [(1.0, ("test", "all"))],
-        "_default": [(1.0, ("train", "all"))]
-    }
+    # Changed: Split puzzles completely, not examples within puzzles
+    test_puzzle_fraction = 0.2  # Reserve 20% of puzzles for testing
     
     total_puzzles = 0
     for subdir in os.scandir(dataset_path):
@@ -164,19 +161,29 @@ def load_puzzles_arcagi(results: dict, dataset_path: str, config: DataProcessCon
             # Shuffle puzzles
             np.random.shuffle(puzzles)
             
-            # Assign by fraction
-            for idx, (default_name, puzzle) in enumerate(puzzles):
-                fraction = idx / len(puzzles)
-                test_examples_dest = None
-                for f, dest in test_examples_map.get(subdir.name, test_examples_map["_default"]):
-                    if fraction < f:
-                        test_examples_dest = dest
-                        break
-                        
-                assert test_examples_dest is not None
+            # Split puzzles at puzzle level to avoid data leakage
+            if subdir.name == "evaluation":
+                # For evaluation set, reserve some puzzles completely for testing
+                num_test_puzzles = int(len(puzzles) * test_puzzle_fraction)
+                train_puzzles = puzzles[num_test_puzzles:]
+                test_puzzles = puzzles[:num_test_puzzles]
                 
-                convert_single_arc_puzzle(results, default_name, puzzle, config.num_aug, {"train": train_examples_dest, "test": test_examples_dest})
-                total_puzzles += 1
+                # Process train puzzles - both train and test examples go to training
+                for default_name, puzzle in train_puzzles:
+                    convert_single_arc_puzzle(results, default_name, puzzle, config.num_aug, 
+                                            {"train": ("train", "all"), "test": ("train", "all")})
+                
+                # Process test puzzles - both train and test examples go to testing  
+                for default_name, puzzle in test_puzzles:
+                    convert_single_arc_puzzle(results, default_name, puzzle, 0,  # No augmentation for test
+                                            {"train": ("test", "all"), "test": ("test", "all")})
+            else:
+                # For other directories, all puzzles go to training
+                for default_name, puzzle in puzzles:
+                    convert_single_arc_puzzle(results, default_name, puzzle, config.num_aug,
+                                            {"train": ("train", "all"), "test": ("train", "all")})
+                
+            total_puzzles += len(puzzles)
 
     print (f"[{dataset_path}] total puzzles: {total_puzzles}")
 
