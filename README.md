@@ -1,3 +1,60 @@
+# Rubiks cube solver
+
+# Dataset
+Parameters can be adjusted at the beginning of each file
+
+The 2x2 dataset builder can be run with:
+```bash
+python dataset/build_cubes.py
+```
+
+For the dataset with all optimal solutions and augmentation:
+```bash
+python dataset/build_2x2.py
+```
+
+For the dataset for the heuristic model:
+```bash
+python dataset/build_2x2_heuristic.py
+```
+
+# Training
+
+The HRM training can be started with:
+(model parameters can be changed in cfg_pretrain and hrm_v1_2x2)
+```bash
+$env:DISABLE_COMPILE="1"; python pretrain.py --config-name cfg_pretrain_2x2
+```
+
+The training of the solution sequence of the small model can be strated with:
+(cubes are scrambled to up to 4 moves)
+```bash
+python train_mlp_less_than4_moves.py
+```
+
+The heuristic model can be trained with:
+```bash
+python train_2x2_heuristic_fc.py
+```
+
+# Evaluation/Deployment
+
+The trained heuristic can be used with an A* search with:
+```bash
+python useful_files/visualize_solution2D.py
+```
+
+An evaluation of the heuristic A* solver can be run with:
+```bash
+python solver.py --checkpoint "checkpoints\2x2-heuristic-fc\100000_examples\best_model.pt"
+
+# with a zero heuristic compare the model to BFS search
+python solver.py --checkpoint "checkpoints\2x2-heuristic-fc\100000_examples\best_model.pt" --model_type zero
+```
+
+
+The rest of the README belongs to the original repo from HRM
+
 # Hierarchical Reasoning Model
 
 ![](./assets/hrm.png)

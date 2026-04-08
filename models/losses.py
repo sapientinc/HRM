@@ -99,3 +99,98 @@ class ACTLossHead(nn.Module):
         detached_outputs = {k: outputs[k].detach() for k in return_keys if k in outputs}
 
         return new_carry, lm_loss + 0.5 * (q_halt_loss + q_continue_loss), metrics, detached_outputs, new_carry.halted.all()
+
+
+class MinLossACTLossHead(nn.Module):
+    def __init__(self, model: nn.Module, loss_type: str):
+        super().__init__()
+        self.model = model
+        self.loss_fn = globals()[loss_type]
+
+    def initial_carry(self, *args, **kwargs):
+        return self.model.initial_carry(*args, **kwargs)  # type: ignore
+
+    def forward(
+        self,
+        return_keys: Sequence[str],
+        # Model args
+        **model_kwargs,
+    ) -> Tuple[Any, torch.Tensor, Dict[str, torch.Tensor], Optional[Dict[str, torch.Tensor]], torch.Tensor]:
+        # Model logits  — B x SeqLen x Vocab
+        new_carry, outputs = self.model(**model_kwargs)
+        labels = new_carry.current_data["labels"]   # (B, S, T)
+        logits = outputs["logits"]                   # (B, T, V)
+
+        B, num_solutions, seq_len = labels.shape
+
+        # ── Per-token loss for every solution candidate ──
+        logits_exp = logits.unsqueeze(1).expand(-1, num_solutions, -1, -1)  # (B, S, T, V)
+
+        per_token_loss = self.loss_fn(
+            logits_exp.reshape(B * num_solutions, seq_len, -1),
+            labels.reshape(B * num_solutions, seq_len),
+            ignore_index=IGNORE_LABEL_ID,
+        ).reshape(B, num_solutions, seq_len)  # (B, S, T)
+
+        # ── Normalised per-solution loss ──
+        sol_mask   = labels != IGNORE_LABEL_ID          # (B, S, T)
+        sol_counts = sol_mask.sum(-1)                    # (B, S)
+        sol_valid  = sol_counts > 0                      # (B, S)
+
+        per_sol_loss = per_token_loss.sum(-1) / sol_counts.clamp_min(1)  # (B, S)
+        per_sol_loss = torch.where(sol_valid, per_sol_loss, 1e10)
+
+        # ── Select the min-loss solution per example ──
+        best_idx = per_sol_loss.argmin(dim=1)            # (B,)
+        bi = torch.arange(B, device=labels.device)
+
+        best_labels = labels[bi, best_idx]               # (B, T)
+        has_valid   = sol_valid.any(dim=1)                # (B,)
+        best_loss   = torch.where(has_valid, per_sol_loss[bi, best_idx], 0.0)
+
+        # ── Metrics ──
+        with torch.no_grad():
+            preds = torch.argmax(logits, dim=-1)         # (B, T)
+
+            # Token-level accuracy against best solution
+            best_mask    = best_labels != IGNORE_LABEL_ID
+            best_counts  = best_mask.sum(-1)
+            best_divisor = best_counts.clamp_min(1).unsqueeze(-1)
+            is_correct   = best_mask & (preds == best_labels)
+
+            # Exact-match: correct if prediction matches ANY valid solution
+            preds_exp    = preds.unsqueeze(1).expand(-1, num_solutions, -1)  # (B, S, T)
+            match_counts = ((preds_exp == labels) & sol_mask).sum(-1)        # (B, S)
+            any_seq_correct = ((match_counts == sol_counts) & sol_valid).any(dim=1)  # (B,)
+
+            valid_metrics = new_carry.halted & has_valid
+            metrics = {
+                "count":          valid_metrics.sum(),
+                "accuracy":       torch.where(valid_metrics, (is_correct.to(torch.float32) / best_divisor).sum(-1), 0).sum(),
+                "exact_accuracy": (valid_metrics & any_seq_correct).sum(),
+                "q_halt_accuracy": (valid_metrics & ((outputs["q_halt_logits"] >= 0) == any_seq_correct)).sum(),
+                "steps":          torch.where(valid_metrics, new_carry.steps, 0).sum(),
+            }
+
+        # ── Losses ──
+        lm_loss    = best_loss.sum()
+        q_halt_loss = F.binary_cross_entropy_with_logits(
+            outputs["q_halt_logits"],
+            any_seq_correct.to(outputs["q_halt_logits"].dtype),
+            reduction="sum",
+        )
+
+        metrics.update({
+            "lm_loss":    lm_loss.detach(),
+            "q_halt_loss": q_halt_loss.detach(),
+        })
+
+        q_continue_loss = 0
+        if "target_q_continue" in outputs:
+            q_continue_loss = F.binary_cross_entropy_with_logits(
+                outputs["q_continue_logits"], outputs["target_q_continue"], reduction="sum"
+            )
+            metrics["q_continue_loss"] = q_continue_loss.detach()
+
+        detached_outputs = {k: outputs[k].detach() for k in return_keys if k in outputs}
+        return new_carry, lm_loss + 0.5 * (q_halt_loss + q_continue_loss), metrics, detached_outputs, new_carry.halted.all()

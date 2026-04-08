@@ -50,6 +50,12 @@ class HierarchicalReasoningModel_ACTV1Config(BaseModel):
     rms_norm_eps: float = 1e-5
     rope_theta: float = 10000.0
     
+    # If set, input and output have different lengths.
+    # input_seq_len = length of the input (e.g. 24 for 2x2 cube state)
+    # seq_len = length of the output (e.g. 11 for max solution length)
+    # When None, input and output share the same seq_len (original behavior).
+    input_seq_len: Optional[int] = None
+
     # Halting Q-learning config
     halt_max_steps: int
     halt_exploration_prob: float
@@ -119,13 +125,27 @@ class HierarchicalReasoningModel_ACTV1_Inner(nn.Module):
             self.puzzle_emb = CastedSparseEmbedding(self.config.num_puzzle_identifiers, self.config.puzzle_emb_ndim,
                                                     batch_size=self.config.batch_size, init_std=0, cast_to=self.forward_dtype)
 
+        # Sequence layout: [puzzle_emb | input_tokens | (output_queries)]
+        # When input_seq_len is set, output queries are appended and logits come from those positions.
+        # When input_seq_len is None, input and output share seq_len (original behavior).
+        self._has_output_queries = self.config.input_seq_len is not None
+        self._input_len = self.config.input_seq_len if self._has_output_queries else self.config.seq_len
+        self._internal_seq_len = self.puzzle_emb_len + self._input_len + (self.config.seq_len if self._has_output_queries else 0)
+        self._output_start = (self.puzzle_emb_len + self._input_len) if self._has_output_queries else self.puzzle_emb_len
+
+        if self._has_output_queries:
+            self.output_queries = nn.Buffer(
+                trunc_normal_init_(torch.empty(self.config.seq_len, self.config.hidden_size, dtype=self.forward_dtype), std=1),
+                persistent=True
+            )
+
         # LM Blocks
         if self.config.pos_encodings == "rope":
             self.rotary_emb = RotaryEmbedding(dim=self.config.hidden_size // self.config.num_heads,
-                                              max_position_embeddings=self.config.seq_len + self.puzzle_emb_len,
+                                              max_position_embeddings=self._internal_seq_len,
                                               base=self.config.rope_theta)
         elif self.config.pos_encodings == "learned":
-            self.embed_pos = CastedEmbedding(self.config.seq_len + self.puzzle_emb_len, self.config.hidden_size, init_std=embed_init_std, cast_to=self.forward_dtype)
+            self.embed_pos = CastedEmbedding(self._internal_seq_len, self.config.hidden_size, init_std=embed_init_std, cast_to=self.forward_dtype)
         else:
             raise NotImplementedError()
 
@@ -157,6 +177,12 @@ class HierarchicalReasoningModel_ACTV1_Inner(nn.Module):
 
             embedding = torch.cat((puzzle_embedding.view(-1, self.puzzle_emb_len, self.config.hidden_size), embedding), dim=-2)
 
+        # Append output queries if input/output lengths differ
+        if self._has_output_queries:
+            B = embedding.shape[0]
+            output_q = self.output_queries.unsqueeze(0).expand(B, -1, -1)
+            embedding = torch.cat((embedding, output_q), dim=-2)
+
         # Position embeddings
         if self.config.pos_encodings == "learned":
             # scale by 1/sqrt(2) to maintain forward variance
@@ -167,8 +193,8 @@ class HierarchicalReasoningModel_ACTV1_Inner(nn.Module):
 
     def empty_carry(self, batch_size: int):
         return HierarchicalReasoningModel_ACTV1InnerCarry(
-            z_H=torch.empty(batch_size, self.config.seq_len + self.puzzle_emb_len, self.config.hidden_size, dtype=self.forward_dtype),
-            z_L=torch.empty(batch_size, self.config.seq_len + self.puzzle_emb_len, self.config.hidden_size, dtype=self.forward_dtype),
+            z_H=torch.empty(batch_size, self._internal_seq_len, self.config.hidden_size, dtype=self.forward_dtype),
+            z_L=torch.empty(batch_size, self._internal_seq_len, self.config.hidden_size, dtype=self.forward_dtype),
         )
         
     def reset_carry(self, reset_flag: torch.Tensor, carry: HierarchicalReasoningModel_ACTV1InnerCarry):
@@ -205,7 +231,7 @@ class HierarchicalReasoningModel_ACTV1_Inner(nn.Module):
 
         # LM Outputs
         new_carry = HierarchicalReasoningModel_ACTV1InnerCarry(z_H=z_H.detach(), z_L=z_L.detach())  # New carry no grad
-        output = self.lm_head(z_H)[:, self.puzzle_emb_len:]
+        output = self.lm_head(z_H)[:, self._output_start:]
 
         # Q head
         q_logits = self.q_head(z_H[:, 0]).to(torch.float32)

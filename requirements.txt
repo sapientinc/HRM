@@ -1,5 +1,4 @@
 torch
-adam-atan2
 einops
 tqdm
 coolname
@@ -9,3 +8,4 @@ wandb
 omegaconf
 hydra-core
 huggingface_hub
+maggiccube
