@@ -7,7 +7,7 @@ import torch.distributed as dist
 
 import pydantic
 from omegaconf import OmegaConf
-from pretrain import PretrainConfig, init_train_state, evaluate, create_dataloader
+from pretrain import PretrainConfig, init_train_state, evaluate, create_dataloader, get_device
 
 
 class EvalConfig(pydantic.BaseModel):
@@ -24,12 +24,17 @@ def launch():
     # Initialize distributed training if in distributed environment (e.g. torchrun)
     if "LOCAL_RANK" in os.environ:
         # Initialize distributed, default device and dtype
-        dist.init_process_group(backend="nccl")
+        # Note: MPS doesn't support distributed training
+        if torch.cuda.is_available():
+            dist.init_process_group(backend="nccl")
 
-        RANK = dist.get_rank()
-        WORLD_SIZE = dist.get_world_size()
+            RANK = dist.get_rank()
+            WORLD_SIZE = dist.get_world_size()
 
-        torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
+            torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
+        else:
+            # For non-CUDA systems, skip distributed setup
+            print("Distributed training is only supported with CUDA. Running in single-process mode.")
 
     with open(os.path.join(os.path.dirname(eval_cfg.checkpoint), "all_config.yaml"), "r") as f:
         config = PretrainConfig(**yaml.safe_load(f))
@@ -44,10 +49,11 @@ def launch():
     # Models
     train_state = init_train_state(config, train_metadata, world_size=WORLD_SIZE)
     # Try unwrap torch.compile
+    device = get_device()
     try:
-        train_state.model.load_state_dict(torch.load(eval_cfg.checkpoint, map_location="cuda"), assign=True)
+        train_state.model.load_state_dict(torch.load(eval_cfg.checkpoint, map_location=device), assign=True)
     except:
-        train_state.model.load_state_dict({k.removeprefix("_orig_mod."): v for k, v in torch.load(eval_cfg.checkpoint, map_location="cuda").items()}, assign=True)
+        train_state.model.load_state_dict({k.removeprefix("_orig_mod."): v for k, v in torch.load(eval_cfg.checkpoint, map_location=device).items()}, assign=True)
     
     train_state.step = 0
     ckpt_filename = os.path.basename(eval_cfg.checkpoint)
@@ -55,13 +61,13 @@ def launch():
         train_state.step = int(ckpt_filename.removeprefix("step_"))
 
     # Evaluate
-    print ("Starting evaluation")
+    print(f"Starting evaluation on device: {get_device()}")
     
     train_state.model.eval()
     metrics = evaluate(config, train_state, eval_loader, eval_metadata, rank=RANK, world_size=WORLD_SIZE)
 
     if metrics is not None:
-        print (metrics)
+        print(metrics)
 
 
 if __name__ == "__main__":

@@ -1,4 +1,5 @@
 from typing import Tuple
+import warnings
 
 import torch
 from torch import nn
@@ -6,14 +7,72 @@ import torch.nn.functional as F
 
 try:
     from flash_attn_interface import flash_attn_func  # type: ignore[import]
+    HAS_FLASH_ATTN = True
 except ImportError:
-    # Fallback to FlashAttention 2
-    from flash_attn import flash_attn_func  # type: ignore[import]
+    try:
+        # Fallback to FlashAttention 2
+        from flash_attn import flash_attn_func  # type: ignore[import]
+        HAS_FLASH_ATTN = True
+    except ImportError:
+        # No FlashAttention available, use fallback
+        HAS_FLASH_ATTN = False
+        flash_attn_func = None
+        warnings.warn(
+            "FlashAttention not available. Falling back to standard PyTorch attention. "
+            "This may be slower and use more memory. For better performance, install FlashAttention.",
+            UserWarning,
+            stacklevel=2
+        )
 
 from models.common import trunc_normal_init_
 
 
 CosSin = Tuple[torch.Tensor, torch.Tensor]
+
+
+def _fallback_flash_attn_func(q, k, v, causal=False):
+    """
+    Fallback implementation of flash attention using standard PyTorch operations.
+    
+    Args:
+        q: Query tensor of shape [batch_size, seq_len, num_heads, head_dim]
+        k: Key tensor of shape [batch_size, seq_len, num_kv_heads, head_dim] 
+        v: Value tensor of shape [batch_size, seq_len, num_kv_heads, head_dim]
+        causal: Whether to apply causal masking
+    
+    Returns:
+        Attention output of shape [batch_size, seq_len, num_heads, head_dim]
+    """
+    batch_size, seq_len, num_heads, head_dim = q.shape
+    _, _, num_kv_heads, _ = k.shape
+    
+    # Transpose to [batch_size, num_heads, seq_len, head_dim]
+    q = q.transpose(1, 2)
+    k = k.transpose(1, 2)
+    v = v.transpose(1, 2)
+    
+    # Handle grouped query attention (repeat k,v if needed)
+    if num_kv_heads != num_heads:
+        # Repeat k,v to match number of query heads
+        k = k.repeat_interleave(num_heads // num_kv_heads, dim=1)
+        v = v.repeat_interleave(num_heads // num_kv_heads, dim=1)
+    
+    # Scaled dot-product attention
+    scale = head_dim ** -0.5
+    attn_weights = torch.matmul(q, k.transpose(-2, -1)) * scale
+    
+    if causal:
+        # Apply causal mask
+        mask = torch.triu(torch.ones(seq_len, seq_len, device=q.device), diagonal=1).bool()
+        attn_weights.masked_fill_(mask, float('-inf'))
+    
+    attn_weights = F.softmax(attn_weights, dim=-1)
+    attn_output = torch.matmul(attn_weights, v)
+    
+    # Transpose back to [batch_size, seq_len, num_heads, head_dim]
+    attn_output = attn_output.transpose(1, 2)
+    
+    return attn_output
 
 
 def _find_multiple(a, b):
@@ -126,12 +185,24 @@ class Attention(nn.Module):
             cos, sin = cos_sin
             query, key = apply_rotary_pos_emb(query, key, cos, sin)
 
-        # flash attn
-        attn_output = flash_attn_func(q=query, k=key, v=value, causal=self.causal)
-        if isinstance(attn_output, tuple):  # fa2 and fa3 compatibility
-            attn_output = attn_output[0]
+        # flash attn or fallback
+        if HAS_FLASH_ATTN:
+            attn_output = flash_attn_func(q=query, k=key, v=value, causal=self.causal)
+            if isinstance(attn_output, tuple):  # fa2 and fa3 compatibility
+                attn_output = attn_output[0]
+        else:
+            attn_output = _fallback_flash_attn_func(q=query, k=key, v=value, causal=self.causal)
 
-        attn_output = attn_output.view(batch_size, seq_len, self.output_size)  # type: ignore
+        # attn_output: [batch_size, num_heads, seq_len, head_dim]
+        if HAS_FLASH_ATTN:
+            # FlashAttention output is contiguous, safe to use .view()
+            attn_output = attn_output.view(batch_size, seq_len, self.output_size)  # type: ignore
+        else:
+            # Fallback attention may not be contiguous due to transpose operations
+            # Ensure contiguity before using view
+            if not attn_output.is_contiguous():
+                attn_output = attn_output.contiguous()
+            attn_output = attn_output.view(batch_size, seq_len, self.output_size)  # type: ignore
         return self.o_proj(attn_output)
 
 

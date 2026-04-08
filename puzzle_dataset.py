@@ -3,6 +3,7 @@ import json
 
 import numpy as np
 import pydantic
+import tqdm
 
 import torch
 from torch.utils.data import IterableDataset, get_worker_info
@@ -118,6 +119,12 @@ class PuzzleDataset(IterableDataset):
     def _iter_test(self):
         for set_name, dataset in self._data.items():  # type: ignore
             total_examples = len(dataset["inputs"])
+            total_batches = (total_examples + self.config.global_batch_size - 1) // self.config.global_batch_size  # ceil division
+
+            # Create progress bar only on rank 0
+            progress_bar = None
+            if self.config.rank == 0:
+                progress_bar = tqdm.tqdm(total=total_batches, desc=f"Evaluating {set_name}")
 
             # Load examples one by one
             start_index = 0
@@ -145,8 +152,16 @@ class PuzzleDataset(IterableDataset):
 
                 yield set_name, batch, end_index - start_index
                 
+                # Update progress bar
+                if progress_bar is not None:
+                    progress_bar.update(1)
+
                 # Advance to next batch
                 start_index += self.config.global_batch_size
+
+            # Close progress bar
+            if progress_bar is not None:
+                progress_bar.close()
 
     def _iter_train(self):
         for set_name, dataset in self._data.items():  # type: ignore

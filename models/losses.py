@@ -22,7 +22,9 @@ def log_stablemax(x, dim=-1):
 
 
 def stablemax_cross_entropy(logits, labels, ignore_index: int = -100):
-    logprobs = log_stablemax(logits.to(torch.float64), dim=-1)
+    # Use float32 for MPS compatibility, float64 for other devices
+    dtype = torch.float32 if logits.device.type == 'mps' else torch.float64
+    logprobs = log_stablemax(logits.to(dtype), dim=-1)
 
     valid_mask = labels != ignore_index
     transformed_labels = torch.where(valid_mask, labels, 0)
@@ -33,8 +35,22 @@ def stablemax_cross_entropy(logits, labels, ignore_index: int = -100):
 
 def softmax_cross_entropy(logits, labels, ignore_index: int = -100):
     # Cast logits to f32
-    # Flatten logits
-    return F.cross_entropy(logits.to(torch.float32).view(-1, logits.shape[-1]), labels.to(torch.long).view(-1), ignore_index=ignore_index, reduction="none").view(labels.shape)
+    logits_f32 = logits.to(torch.float32)
+    labels_long = labels.to(torch.long)
+
+    if logits.is_cuda:
+        # Ensure tensors are contiguous before using .view()
+        if not logits_f32.is_contiguous():
+            logits_f32 = logits_f32.contiguous()
+        if not labels_long.is_contiguous():
+            labels_long = labels_long.contiguous()
+
+    return F.cross_entropy(
+        logits_f32.view(-1, logits.shape[-1]),
+        labels_long.view(-1),
+        ignore_index=ignore_index,
+        reduction="none"
+    ).view(labels.shape)
 
 
 class ACTLossHead(nn.Module):
@@ -42,7 +58,7 @@ class ACTLossHead(nn.Module):
         super().__init__()
         self.model = model
         self.loss_fn = globals()[loss_type]
-        
+
     def initial_carry(self, *args, **kwargs):
         return self.model.initial_carry(*args, **kwargs)  # type: ignore
 
@@ -65,17 +81,17 @@ class ACTLossHead(nn.Module):
 
             is_correct = mask & (torch.argmax(outputs["logits"], dim=-1) == labels)
             seq_is_correct = is_correct.sum(-1) == loss_counts
-            
+
             # Metrics (halted)
             valid_metrics = new_carry.halted & (loss_counts > 0)
             metrics = {
                 "count": valid_metrics.sum(),
-                
-                "accuracy":       torch.where(valid_metrics, (is_correct.to(torch.float32) / loss_divisor).sum(-1), 0).sum(),
+
+                "accuracy":       torch.where(valid_metrics, (is_correct.to(torch.float32) / loss_divisor).sum(-1), torch.zeros_like((is_correct.to(torch.float32) / loss_divisor).sum(-1))).sum(),
                 "exact_accuracy": (valid_metrics & seq_is_correct).sum(),
 
                 "q_halt_accuracy": (valid_metrics & ((outputs["q_halt_logits"] >= 0) == seq_is_correct)).sum(),
-                "steps":          torch.where(valid_metrics, new_carry.steps, 0).sum(),
+                "steps":          torch.where(valid_metrics, new_carry.steps, torch.zeros_like(new_carry.steps)).sum(),
             }
 
         # Losses
