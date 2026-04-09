@@ -15,6 +15,9 @@ Read Our Paper: [https://arxiv.org/abs/2506.21734](https://arxiv.org/abs/2506.21
 
 ## Quick Start Guide 🚀
 
+- 🔥 **One-click Colab demo** (Sudoku-Extreme 1 k on T4):  
+  [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/mohabedalgani/HRM/blob/main/notebooks/colab/HRM_Sudoku_1k_T4.ipynb)
+
 ### Prerequisites ⚙️
 
 Ensure PyTorch and CUDA are installed. The repo needs CUDA extensions to be built. If not present, run the following commands:
