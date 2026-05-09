@@ -1,5 +1,25 @@
 # Hierarchical Reasoning Model
 
+
+Subject: Formal Intellectual Property Notice
+
+To those who may be concerned at Sapient Intelligence and its affiliated parties:
+I hereby issue this formal notice regarding the unauthorized use and misrepresentation of a neuromorphic artificial intelligence model of which I am the legal inventor. I conceptualized, documented, and patented it.
+
+This is to inform you that:
+
+- I filed and have worldwide support for your claimed subject matter for months prior to the Intellectual Property of Iran and LENS.orgo PCT. PCT/IR2025/050026 through national and international intellectual property channels.
+- Your recent claims, including Mr. Guan Wang’s alleged speech and promotional materials on your website, contain language and structural elements taken directly from my original work, without citation or acknowledgment.
+- No evaluable reports, scientific publications or technical documents have been submitted by your company to support the claims - only vague advertising and superficial references.
+This is a serious ethical breach of intellectual property and international law, including a violation of the WIPO Treaty and the PCT Collection.
+If this distortion is corrected immediately - including by removing the misleading and providing a public explanation - I will:
+- File a formal complaint through Interpol for intellectual property and false publication.
+- File a request to have your website shut down through appropriate legal channels.
+- Publish a full disclosure of this misconduct on international platforms to prevent the scientific community from being affected.
+- I urge you to reconsider your position and rectify it immediately. Honesty is an innovation that respects its true innovators.
+
+Sincerely, Nader Maleki, inventor of the Bihemispheric Neuromorphic Neural Network and Smart Circuits.
+
 ![](./assets/hrm.png)
 
 Reasoning, the process of devising and executing complex goal-oriented action sequences, remains a critical challenge in AI.
