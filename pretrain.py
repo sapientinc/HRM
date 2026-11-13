@@ -502,22 +502,22 @@ def train_batch(config: PretrainConfig, train_state: TrainState, batch: Any, glo
 
     ((1 / (global_batch_size * config.accum_steps)) * loss).backward()
 
-    # All reduce
-    if world_size > 1:
-        for param in train_state.model.parameters():
-            if param.requires_grad:
-                # If gradient was not computed on this rank due to conditional constructs,
-                # create a zero tensor to avoid desynchronizing NCCL with other ranks.
-                if param.grad is None:
-                    param.grad = torch.zeros_like(param)
-                dist.all_reduce(param.grad)
-
     is_accum_step = (train_state.accum_counter == config.accum_steps)
 
     lr_this_step = None
     grad_norm = None
 
     if is_accum_step:
+        # Reduce once per optimizer update. Reducing after every microbatch would
+        # repeatedly sum gradients already synchronized by earlier microbatches.
+        if world_size > 1:
+            for param in train_state.model.parameters():
+                if param.requires_grad:
+                    # Keep collective calls aligned for conditionally unused parameters.
+                    if param.grad is None:
+                        param.grad = torch.zeros_like(param)
+                    dist.all_reduce(param.grad)
+
         # Compute gradient norm (and optionally clip)
         grad_norm = torch.nn.utils.clip_grad_norm_(
             train_state.model.parameters(),
